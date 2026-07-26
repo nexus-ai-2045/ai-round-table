@@ -1,195 +1,211 @@
-# ai-roundtable 設計書 v2
+# ai-roundtable 設計書 v3
 
-- 日付: 2026-07-26 (v1 同日。敵対的レビュー + 裏取りリサーチを反映)
-- 状態: CEO レビュー待ち
+- 日付: 2026-07-26 (v2 同日改訂)
+- 状態: Codex 2nd レビュー待ち → CEO レビュー
+- v2→v3 の変更: (a) Codex 1st レビュー 9 指摘の反映 (b) **席セッション方式** への転換 (CEO 指示:
+  参加者は使い捨てプロセスではなく、アプリからも見える常駐の「席」に投げる)
 - 前身 context: `~/Projects/Documents/inbox/2026-07-26-ai-roundtable-design-context-for-all-ai.md`
-- 調査根拠: `~/Projects/Documents/nexus_ai/research/multi-ai-realtime-linking/report.md`
-- v1→v2 の変更根拠: 敵対的レビュー 8 指摘 + 裏取り 14 発見 (§11 参照)
+- レビュー履歴: CC 敵対 8 件 (v2 反映) / Web 裏取り 14 件 (v2 反映) / Codex 1st 9 件 (v3 反映, scratch/codex-design-review-reply.md)
 
 ## 1. 目的
 
-Codex / CC (Claude Code) / Grok / Gemini (agy) を Windows 上でリンクし、
-**人間 (CEO) が司会**する壁打ち・多者会談を回す基盤。
-
-- 新 UI は作らない。ホストは既存チャット (どの AI でもよい = host-agnostic)
-- チャット履歴は各 AI のネイティブ管理のまま。共有するのは議事録だけ
-- cmux (Mac 専用) に依存しない
+Codex / CC / Grok / Gemini (agy) を Windows 上でリンクし、**人間 (CEO) が司会**する壁打ち・多者会談を回す基盤。
+新 UI は作らない。cmux (Mac 専用) に依存しない。UI 自動化は最終 fallback のみ。
 
 ## 2. 決定事項と根拠
 
 | # | 決定 | 根拠 |
 |---|---|---|
-| D1 | 司会 = 人間固定 | 分散網目型は誤り 17.2 倍 / 中央 orchestrator 型 4.4 倍 (arXiv 2512.08296, 一次ソース確認済み)。echo chamber は司会の指名で防ぐ |
-| D2 | 共有点 = 議事録 md 1 枚 (blackboard) | blackboard 方式の有効性は arXiv 2510.01285。全文同期をしない理由は同調圧力対策 (MachineSoM, ACL 2024 系の知見) ※v2 で根拠を差し替え |
-| D3 | 書記 = ホストから分離した**別プロセス** | 兼任バイアスの構造排除。v2: 「判断しない」を改め、書記の判断は**要約のみ**に限定と正直に定義 |
-| D4 | 書記の機械部分 = 決定的スクリプト (`dispatch.py`) | ホスト間の品質差を最小化。LLM 判断は要約 1 点に閉じ込める (コスト構造上も妥当: 先行実測で orchestrator ループが総コスト 69%) |
-| D5 | host-agnostic | プロトコルは `PROTOCOL.md` に置く。**どの AI がホストでも書記は同じ別プロセス起動** (CC の subagent 機能に依存しない) |
-| D6 | 参加者は完全対称 + **stateless** | ホスト AI 自身の意見も CLI で他と同列に呼ぶ。v2: セッション継続は使わず毎回新規プロセス + 議事録パスのみ (場外文脈の混入 = 隠れ非対称の排除) |
-| D7 | MCP 相互接続は v0.3 まで見送り | `--dangerously-skip-permissions` 前提レシピは停止線と衝突。MVP には過剰 |
-| D8 | 収束判定は自動化しない | 「同結論帯」「反復」の判定は判断業務。**打ち切りは常に CEO の宣言** (v2 新設。v1 の「早期打ち切り進言」を削除) |
-| D9 | 参加者は議事録に直接書かない | 規約でなく機構で守る: 参加者→スクラッチファイル→書記が機械 merge + diff 検証 (v2 新設) |
+| D1 | 司会 = 人間固定 | 網目型は誤り 17.2 倍 / 中央型 4.4 倍 (arXiv 2512.08296)。echo chamber は指名で防ぐ |
+| D2 | 共有点 = 議事録 (blackboard) | arXiv 2510.01285。全文同期はしない |
+| D3 | 書記 = ホストから分離した別プロセス。判断は持たない (v3: 要約層は v0.2 送りで v0.1 の書記は完全に決定的) | 兼任バイアス排除 + Codex#7/#9 |
+| D4 | 書記の機械部分 = 決定的スクリプト | ホスト間品質差の最小化。orchestrator ループがコスト 69% という先行実測 |
+| D5 | host-agnostic | PROTOCOL.md + scripts が本体。アダプタは薄い参照のみ |
+| D6 | **参加者 = 席セッション (persistent seat)** | v2 の stateless 対称を撤回 (CEO 指示)。各 AI に roundtable 専用セッションを 1 つ作り、毎回 resume で投げる。既存の作業チャットには触れない。場外文脈の混入は「人間司会が裁定する」前提で許容するトレードオフと明記 |
+| D7 | MCP 相互接続・常駐サーバは v0.2+ | 席 resume で MVP は成立。daemon/serve は latency 改善フェーズで |
+| D8 | 収束判定は自動化しない。打ち切り・裁定・メンバー変更は CEO 宣言のみ | CC#1 |
+| D9 | 参加者は minutes に直接書かない。**隔離出力 + hash 検証 + 書記 merge** | CC#3 + Codex#1/#2 で強化 |
 
 ## 3. アーキテクチャ
 
 ```
 CEO（司会・裁定・打ち切り宣言）
-  ⇄ ホストチャット（任意の AI: CEO との会話と scripts/ 起動のみ。議事録に触らず、意見も言わない）
+  ⇄ ホストチャット（任意の AI: CEO 対話と scripts 起動のみ。意見を言わない・要約しない）
         │
         ▼
-   書記 = 2 層 (どのホストでも同じ形で別プロセス起動)
-   ├─ 機械層: scripts/dispatch.py（決定的。LLM なし）
-   │    ├─ 議事録の生成・merge・round 管理・検証
-   │    └─ 参加者 CLI の起動・回収
-   └─ 要約層: scripts/summarize.py → 固定の安いモデル CLI を別プロセスで呼ぶ
-        （書記唯一の LLM 判断。ホストには要約させない）
+   書記 = scripts/dispatch.py（決定的。v0.1 に LLM 判断なし）
+   ├─ 席セッションへの投げ込み (transport 層)
+   ├─ 隔離出力の回収・検証 (hash / schema)・minutes への merge
+   └─ journal による round / invocation 管理
         ▼
-  minutes/<議題>/minutes.md（blackboard = 唯一の共有点）
+  minutes/<議題>/minutes.md（blackboard）+ journal.json + scratch/
    ▲              ▲              ▲              ▲
- codex exec    claude -p     grok agent      agy -p
- (Codex)       (CC)          (Grok)          (Gemini)
-   └── 各参加者は minutes/<議題>/scratch/<participant>-r<N>.md にのみ書く
+ Codex の席     CC の席        Grok の席      agy の席
+ (専用 session   (専用 session   (専用 session   (専用 session
+  アプリにも表示)  --continue)     restore)        --conversation)
 ```
+
+### 3.1 席セッション (seat)
+
+- 各参加者に **roundtable 専用のセッションを 1 つ**作成し、`seats.json` に ID を登録
+- dispatch は毎回その席を resume して短文 pointer を投げる:
+  「minutes/<議題>/minutes.md を読み、出力契約に従い <隔離出力パス> に JSON で意見を書け」
+- **席の writer は dispatch のみ** (single-writer)。CEO がアプリ/TUI で席を開いて読む・
+  手動介入するのは自由だが、dispatch 実行中はしない (journal の実行中フラグで検知)
+- Codex はセッションストアが CLI/アプリ共有 (実機確認済み) のため、席はアプリのチャット一覧にも
+  現れる = 「アプリで見える・触れる」を UI 自動化なしで満たす
+- 席が壊れた/消えた場合: 新席を作り seats.json を更新 (履歴は minutes に残っているので損失は文脈のみ)
+
+### 3.2 transport 優先順位
+
+| 優先 | 方式 | 状態 |
+|---|---|---|
+| 1 | 席 resume: `codex exec resume <id>` / `claude -p --continue 相当` / `grok sessions restore` / `agy --conversation <id>` | v0.1。各コマンドの正確な形は adapter manifest で固定 (Codex#6) |
+| 2 | 常駐サーバ: `codex app-server daemon` (制御 socket + JSON-RPC) / `grok agent serve` (WebSocket :2419) / `grok leader` | v0.2+ (latency 改善) |
+| 3 | UI 自動化 (Windows-MCP) | 最終 fallback。設計上は存在のみ記す |
 
 ## 4. コンポーネント
 
-### 4.1 PROTOCOL.md（本体・AI 非依存の手順書）
+### 4.1 adapter manifest（Codex#1/#6 対応・機械可読）
 
-ホストが読む司会補佐マニュアル。内容:
+`adapters/manifest.json` に参加者ごとの実行契約を固定:
 
-1. 議題開始: `minutes/YYYY-MM-DD-<slug>/minutes.md` を template から生成
-2. **指名はラウンド単位のバッチが基本**: CEO「この周は codex→cc→grok の順で」→ 書記が順に dispatch し、
-   ラウンド完了時のみ CEO に戻る (毎ターン指名も可能だが必須にしない)
-3. 発言回収: dispatch.py が scratch → minutes.md へ機械 merge、summarize.py の要約をホストがチャットに貼る
-4. ラウンド管理: 上限 3。**打ち切り・続行・裁定はすべて CEO の宣言** (自動進言なし)
-5. 裁定: CEO の裁定を書記が記録し `status: closed` に。
-   **close 前に dispatch 失敗・検証 fail の一覧を CEO に必ず提示** (偽装成功防止)
-
-### 4.2 議事録フォーマット（minutes/_template.md）
-
-```markdown
----
-topic: <議題>
-status: open | closed
-round: 1            # 規則: 指名バッチが一巡完了するたびに書記が +1 (機械更新)
-participants: [codex, cc]   # 変更は CEO の明示指示→書記が機械更新 (フリーテキスト解釈しない)
-created: YYYY-MM-DD
-budget_note: <概算コスト上限。超過見込み時は書記が dispatch 前に警告>
-verdict: (裁定。closed 時に必須)
----
-
-# <議題>
-
-## 背景
-
-## Round 1
-### codex (役割: 実装)
-(発言本文)
-**Evidence**: URL / 実行ログ / 差分   ← 空なら dispatch.py が fail 扱い
-
-## 裁定 (CEO)
+```json
+{
+  "codex": {
+    "argv": ["<フルパス>/codex.cmd", "exec", "resume", "{seat_id}", "{prompt}"],
+    "cli_path_note": "同名 CLI が複数存在 (実測)。フルパス必須 + version pin",
+    "prompt_transport": "argv",
+    "sandbox": ["-s", "workspace-write などバージョンで smoke 確定"],
+    "cwd": "{isolated_run_dir}",
+    "writable": ["{isolated_run_dir}"],
+    "readable": ["{minutes_snapshot}"]
+  }
+}
 ```
 
-規約 (機構で強制): 参加者が書けるのは自分の scratch ファイルのみ。minutes.md への書き込みは
-dispatch.py の merge だけ。merge 後に `git diff` で「追記された 1 セクションのみ変更」を assert。
+- `shell=False` の argv 配列のみ。`encoding="utf-8"` 明示。`CREATE_NEW_PROCESS_GROUP` 不使用
+- 参加者の cwd は**隔離実行ディレクトリ**。minutes は読み取り用スナップショットのコピーを渡す
+  (原本パスを教えない)。出力は隔離 dir 内の 1 ファイルのみ
+- negative test 必須: 参加者に「minutes 原本と repo 内の別ファイルを変更しろ」と指示して
+  **両方拒否される**ことを smoke で確認 (先行 OSS で read-only 強制の機能不全が実際に発生)
 
-### 4.3 scripts/dispatch.py（書記・機械層）
+### 4.2 整合性検証（Codex#2 対応: git diff → hash に置換）
 
+- dispatch 開始時: 対象ツリーのパス一覧 + 内容 hash を採取
+- 参加者終了直後: 再採取。**許可された隔離出力以外の作成・削除・変更があれば fail-closed**
+- minutes 更新: 開始時スナップショット hash と一致する場合のみ、書記が構造化出力から
+  新ファイルを生成して `os.replace` (atomic)。git diff は人間向け補助に格下げ
+
+### 4.3 プロセス管理（Codex#3 対応）
+
+- 各 dispatch を **Windows Job Object** に割り当て `KILL_ON_JOB_CLOSE` でツリー kill 保証
+- 出力パスは invocation UUID 入り。timeout 後はその UUID を無効化 (遅延書き込みの混入防止)
+- timeout 既定 600s。exit code / 無出力サイレント死 (DLL 欠如 exit -1073741515 実例) を分類記録
+
+### 4.4 journal（Codex#4 対応）
+
+`minutes/<議題>/journal.json` (atomic 更新):
+
+- round_id / invocation_id / order / participant ごとの state
+  (pending → running → validated → merged / failed) / input hash / output hash
+- merge は invocation_id キーで冪等。復旧時は journal と minutes の埋込 ID を照合、
+  曖昧なら自動続行せず CEO に提示
+- round は「指名バッチ一巡の全 merge 完了」で書記が +1。participants 変更は CEO 明示指示のみ
+
+### 4.5 参加者出力契約（Codex#5/#8 対応）
+
+出力は Markdown 直書きではなく **schema 検証 JSON**:
+
+```json
+{
+  "invocation_id": "...",
+  "opinion": "本文 (markdown 可)",
+  "claims": [
+    {"claim": "...", "evidence_type": "observed|log|diff|source|argument|none", "evidence": "..."}
+  ]
+}
 ```
-python scripts/dispatch.py run <topic-dir> --order codex,cc [--round N] [--timeout 600]
-```
 
-- participant → コマンド (実機確認済み。ただし DLL 欠如等の無言死があるため smoke 必須):
-  - `codex`: `codex exec` / `cc`: `claude -p` / `grok`: `grok agent stdio` / `agy`: `agy -p`
-- **stateless**: 毎回新規プロセス。継続機構 (`resume` / `--continue` / `--conversation`) は v0.1 では使わない
-- prompt は file-backed (一時ファイル + パス渡し)。**`subprocess` は `encoding="utf-8"` 明示、
-  `CREATE_NEW_PROCESS_GROUP` 不使用** (Windows cp1252 / stdin 事故対策)
-- timeout 既定 **600s** (先行 OSS the-council の実測 600-900s に合わせ、300s から引き上げ)
-- 書き込みは **atomic write (tmp→rename)** + 軽量ロックファイル (`.lock`)。
-  Windows は追記の atomic 保証がないため「逐次だから安全」に依存しない
-- **出力バリデーション** (すべて fail 扱いで議事録に記録):
-  空出力 / 直前ラウンドとの完全一致 / Evidence 欄空 / 非 0 終了 / 無出力サイレント死。
-  記録形式: `(dispatch failed: <分類> exit=<code>)`
-- fail は fail-soft で続行するが、**close 時に失敗一覧を必ず CEO に提示** (§4.1-5)
+- minutes 描画時に本文を fenced block / escape で埋め込み、`## 裁定` 等の予約見出しを
+  参加者が生成できないようにする。裁定は機械管理フィールドからのみ描画
+- evidence は「型が明示されている」ことだけを機械検証。真偽・十分性は未検証と表示
+  (非空チェックの形骸化対策)。悪意ある見出し / frontmatter / HTML を fixture にしたテストを用意
 
-### 4.4 scripts/summarize.py（書記・要約層）
+### 4.6 要約層 → v0.2 送り（Codex#7/#9 対応）
 
-- 固定の安いモデルを別プロセス CLI で呼び、参加者発言を 3 行要約 → ホストがチャットに貼る
-- どのホストでも同じコマンド = ホストの subagent 機能・ネイティブ性能に依存しない (D5)
-- 要約なしモード (`--raw`) も用意 (CEO が生ログを読む運用も許す)
+- v0.1 は `--raw` 相当が既定: ホストは merge 済み minutes の該当セクションをそのまま提示
+- v0.2 で要約導入時は: 各行に participant / invocation_id / 原文段落 ID を付け、
+  `non-authoritative` 明示、裁定前に原文確認を要求する形で入れる
+- コスト記録も v0.1 では `estimate/observed/unknown` の別レコード。unknown でも受け入れ可
 
-### 4.5 adapters/（各 AI の薄い入口）
+### 4.7 adapters/（薄い入口）
 
-| AI | アダプタ | 中身 |
-|---|---|---|
-| CC | `adapters/cc-skill/` (/roundtable) | PROTOCOL.md を読み scripts/ を実行するだけ |
-| Codex | `AGENTS.md` | 同上を指す 1 節 |
-| Grok / agy | `adapters/<ai>.md` | 同型の参照ノート |
+各 AI 向け「PROTOCOL.md を読め + scripts を使え」のみ。CC は skill、Codex は AGENTS.md 1 節、
+Grok / agy は参照ノート。**要約・merge・判断をホストにさせない**。
 
-アダプタは「PROTOCOL.md を読め + scripts を使え」以上を書かない (SSOT は PROTOCOL.md)。
-ホストの責務は CEO 対話と scripts 起動のみ。**要約・merge・判断をホストにさせない**。
-
-## 5. データフロー（1 議題 1 周 = MVP の受け入れ基準）
+## 5. データフロー（1 議題 1 周 = MVP 受け入れ基準）
 
 1. CEO: 「議題: X。この周は codex→cc で」
-2. ホスト → dispatch.py: 議事録生成 + codex, cc を順に dispatch
-3. 各参加者: minutes.md を読み、自分の scratch に意見 + Evidence を書く
-4. dispatch.py: scratch → minutes.md へ merge + diff assert。summarize.py が要約
-5. ホスト: 要約をチャット表示 → CEO が次ラウンド or 裁定を宣言
-6. 裁定 → verdict 記入、失敗一覧提示 → status: closed
+2. dispatch.py: minutes 生成 → codex の席へ pointer 投げ (隔離 dir + スナップショット準備)
+3. Codex (席の文脈で): minutes スナップショットを読み、隔離 dir に JSON 出力
+4. dispatch.py: hash 検証 → schema 検証 → minutes へ atomic merge → journal 更新 → cc も同様
+5. ホスト: merge 済みセクションを提示 → CEO が次ラウンド or 裁定宣言
+6. 裁定 → verdict 記入 (機械フィールド)、失敗一覧提示 → status: closed
 
-受け入れ基準: 実議題 1 本が 1 周し、議事録が規約どおり + **1 議題の概算コストが記録されている**こと。
+受け入れ基準: 実議題 1 本が 1 周し、(a) negative test 通過済みの隔離で (b) journal が
+全 invocation を追跡し (c) 議事録が規約どおりであること。
 
 ## 6. エラー処理
 
-- dispatch 失敗: §4.3 のバリデーション分類で記録し続行。close 時に一覧提示
-- 同時書き込み: 逐次 dispatch + atomic write + lock の 3 重 (機構で保証、運用前提にしない)
-- 複数ホストから同一議題を開いた場合: lock ファイルで検知し後発を拒否
-- 書記の暴走防止: dispatch.py は `minutes/<topic>/` 配下と一時ファイル以外に書かない
+- dispatch 失敗分類: 空出力 / schema 違反 / hash 違反 / timeout / 非 0 / 無出力サイレント死。
+  すべて journal + minutes に記録し fail-soft 続行、close 前に一覧提示
+- 席セッション消失: 新席作成 + seats.json 更新
+- 複数ホスト同時起動: journal の running フラグ + lock で後発拒否
+- 書記の書き込み範囲: `minutes/<議題>/` と隔離 run dir のみ
 
 ## 7. テスト
 
-- `dispatch.py`: マッピング / merge + diff assert / バリデーション / atomic write / lock を pytest (CLI は mock)
-- E2E smoke: mock participant (echo スクリプト) で 1 周 → 議事録が規約どおり
-- 実 CLI smoke (手動 1 回): 各 CLI の起動確認に加え、**無言死の検知** (exit code 記録) と
-  **サンドボックス境界の実効性** (参加者が minutes.md を直接書けないこと) を確認
-  (先行 OSS で read-only 強制の機能不全が実際に起きている)
+- unit: manifest 解決 / hash 検証 / schema 検証 / journal 冪等 merge / atomic write / lock
+- E2E (mock): echo participant で 1 周 + **各境界での強制終了 → 再実行** (journal 復旧)
+- adversarial fixture: 予約見出し偽装 / minutes 直接改変 / 遅延書き込み / 未追跡ファイル作成
+- 実 CLI smoke (手動): 席 resume の文脈継続確認 / sandbox 実効性 (negative test) /
+  アプリ画面への反映有無の確認 (未検証事項)
 
 ## 8. ロードマップ
 
 | 版 | 内容 | 完了条件 |
 |---|---|---|
-| v0.1 (MVP) | template + PROTOCOL.md + dispatch.py + summarize.py (codex, cc) + CC アダプタ | §5 受け入れ基準 |
-| v0.2 | grok / agy 追加。得意分野プリセット。バッチ指名の運用磨き | 三者以上の会談 1 本 + コスト実測記録 |
-| v0.3 | セッション継続 (topic ごと store + atomic write) / Codex MCP 昇格 / 並行性の再評価 | 往復レイテンシ改善を実測 |
+| v0.1 | manifest + dispatch.py (席 resume, codex+cc) + journal + 出力契約 + CC アダプタ | §5 受け入れ基準 |
+| v0.2 | grok / agy 席追加。要約層 (参照付き)。コスト実測。常駐サーバ transport 検証 | 三者会談 1 本 + コスト記録 |
+| v0.3 | app-server daemon / serve への transport 昇格。並行性の再評価 | latency 改善を実測 |
 
 ## 9. 境界
 
-- repo は private 起点。GitHub push / 公開は gate 通過 + CEO 明示承認後のみ
-- 書記の判断は要約のみ。裁定・打ち切り・メンバー変更は常に CEO
-- `--dangerously-skip-permissions` は使わない
-- 各 AI のネイティブ履歴には触らない
+- repo は private。GitHub push / 公開は gate + CEO 承認後のみ
+- 裁定・打ち切り・メンバー変更は常に CEO。書記に判断なし (v0.1)
+- `--dangerously-skip-permissions` 不使用。参加者 sandbox は manifest で明示 (Codex 既定
+  `danger-full-access` を実測済みのため、既定に依存しない)
+- 既存の作業チャット・ネイティブ履歴には触れない (席は専用新設)
 
-## 10. 既存資産との関係 / 先行 OSS
+## 10. 未検証事項 (実装前スパイクで確認)
 
-- `shared/scripts/multi_ai/`: 「1 プロンプト N 体撒き」型。本 repo は多ラウンド壁打ちで補完。
-  timeout / CLI 検出の知見は dispatch.py で参照
-- 先行 OSS 調査 (2026-07-26): 最近傍は the-council (Codex+Gemini 並列 1 ラウンド + Claude 統合)。
-  llm-council 系は「並列 1 パス + 自動合意」が主流で、**人間司会×逐次多ラウンドは少数派 = 差別化点**。
-  ai-council-framework が「ラウンド上限 3 / evidence 必須 / 証拠なき同意は無効」を独立採用しており思想の裏付け
-- 異ベンダー CLI 構成のため「同一モデルの共有バイアス」問題を構造的に回避 (agent-review-panel の既知制限との対比)
+1. `codex exec resume <id>` が別プロセス並行時にセッションを破損しないか (席は single-writer 運用だが要確認)
+2. CLI から席に追記した内容がアプリ画面に即時反映されるか (反映されなくても設計は成立)
+3. `grok sessions restore` / `agy --conversation` の非対話モードでの挙動
+4. codex exec resume 時の sandbox フラグの効き方 (negative test で確認)
 
-## 11. v1→v2 変更ログ (揉みの記録)
+## 11. レビュー反映ログ
 
+v1→v2: CC 敵対 8 件 + Web 裏取り 14 件 (詳細は git 履歴の v2 §11)
+v2→v3:
 | 変更 | 由来 |
 |---|---|
-| 書記の「判断しない」→「判断は要約のみ」に正直化。収束判定の自動化を削除 (D8) | 敵対的レビュー #1 |
-| 書記はどのホストでも別プロセス起動 (CC subagent 依存をやめる) | 同 #2 |
-| 参加者 scratch → 機械 merge + diff assert (D9) | 同 #3 |
-| v0.1 stateless 化、`.sessions.json` を v0.3 送り | 同 #4, #6 |
-| 出力バリデーション + close 時失敗一覧 | 同 #5 |
-| round 更新規則 / participants 明示更新 / コスト概算を受け入れ基準に | 同 #7 |
-| ラウンド単位バッチ指名 | 同 #8 |
-| atomic write + lock (Windows append 非保証) | 裏取り 発見 2, 3 |
-| `encoding="utf-8"` / `CREATE_NEW_PROCESS_GROUP` 不使用 | 発見 8 |
-| timeout 300s→600s / 無言死検知 / sandbox 実効性 smoke | 発見 4, 9 |
-| D2 の conformity bias 根拠を差し替え (2510.01285 からは直接確認できず) | 発見 0 |
+| adapter manifest + 隔離実行 dir + negative test | Codex#1, #6 |
+| git diff → hash 検証 (fail-closed) | Codex#2 |
+| Job Object ツリー kill + invocation UUID | Codex#3 |
+| journal + 冪等 merge + クラッシュ復旧 | Codex#4 |
+| 出力を schema 検証 JSON に / 予約見出し防御 | Codex#5 |
+| evidence 型付け | Codex#8 |
+| 要約層・コスト警告を v0.2 送り / v0.1 は raw 既定 | Codex#7, #9 |
+| 席セッション方式 (stateless 撤回) / transport 優先順位 | CEO 指示 2026-07-26 |
