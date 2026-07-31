@@ -1,10 +1,13 @@
-# ai-roundtable 設計書 v5 — chat-first architecture
+# ai-roundtable 設計書 v6 — chat-first architecture
 
-- 日付: 2026-07-27
-- 状態: **CEO GO 済み (2026-07-27)** → 実装計画へ
-- v4→v5: CEO 要件訂正 (2026-07-26) による全面転換。CLI での AI 実行を全面禁止し、
-  席をアプリの実チャットに置く。relay は 3 段自動化、人間は判断のみ (CEO GO 2026-07-27)
-- レビュー履歴: CC 敵対 8 / Web 裏取り 14 / Codex 1st 9 / Codex 2nd 6。
+- 日付: 2026-07-28 (v5: 2026-07-27 CEO GO)
+- 状態: 実装計画あり (docs/plans/) → Task 1 開始待ち
+- v5→v6: 追加調査・実測の統合 (機能変更なし):
+  Windows での app-server 実測 / ACP 収束戦略 / Gemini の Tier1 候補昇格 /
+  fs API による検証補助 / 先行事例ポジショニング。詳細根拠は references/ と
+  `~/Projects/Documents/nexus_ai/research/multi-ai-roundtable-prior-art/report.md`
+- レビュー履歴: CC 敵対 8 / Web 裏取り 14 / Codex 1st 9 / Codex 2nd 6 /
+  実装計画への内部コードレビュー 13 (計画に反映済み)。
   v4 (socket/daemon 案) は採用前に superseded、git 履歴に保全
 
 ## 0. 要件 (CEO 確定)
@@ -58,16 +61,34 @@ CEO（判断のみ: 議題・指名・裁定・打ち切り・割り込み）
 
 ## 4. relay 層 (v5 の核心)
 
-| Tier | 方式 | 対象 (v0.1 時点の候補) | 人間の関与 | 前提 |
+| Tier | 方式 | 対象 (2026-07-28 実測反映) | 人間の関与 | 前提 |
 |---|---|---|---|---|
-| 1 | **公式 API 直結** — AI を起動せず、アプリと同じ会話ストアの席にメッセージを届ける | Codex: `app-server daemon` JSON-RPC (`thread/start·resume·read·list` / `turn/start·interrupt` — スキーマ実在確認済み) / CC: Claude Code Desktop のセッション間 send_message (公式ハーネス機能) | ゼロ | **spike で go/no-go** (§8)。特に「席がアプリ UI に見えるか」 |
+| 1 | **公式 API 直結** — AI を起動せず、アプリと同じ会話ストアの席にメッセージを届ける | 下の「席別 Tier1 経路」参照 | ゼロ | **spike で go/no-go** (§8)。4 席共通の残検証点 = 「プログラムから投げた会話がアプリ画面に出るか」 |
 | 2 | UI 自動化 (Windows-MCP 等) | 公式 API のないアプリ | CEO の明示承認後のみ有効化 | 承認は席 (アプリ) 単位で記録 |
 | 3 | 人間 relay (クリップボード → 貼り付け) | Tier1/2 不成立の席 | 貼り付け | 常に利用可能な縮退運転。v0.1 の受け入れはこの経路でも成立すること |
+
+### 席別 Tier1 経路 (実測・調査済み 2026-07-26〜28)
+
+| 席 | 経路 | 状態 | 出典 |
+|---|---|---|---|
+| Codex | **自前 spawn の `codex app-server` + stdio JSONL** (JSON-RPC 2.0)。`thread/start·resume·read·list·name` / `turn/start·steer·interrupt`。VS Code 拡張・デスクトップアプリと同一プロトコル (stable 扱い)。**daemon 常駐管理は Unix 専用 (実測) のため使わない** | v0.1 spike 対象 | references/codex-app-server-README.ja.md (全文訳) |
+| CC | ホストなので relay 不要。参加者としては CCD セッション間 send_message | v0.1 spike 対象 | ハーネス公式機能 |
+| Grok | `grok agent serve` (WebSocket :2419 + secret) / `grok leader` (`~/.grok/leader.sock`, 複数 client で 1 backend 共有) / **ACP** | v0.2 spike | references/grok-build-integration.ja.md |
+| Gemini | **Antigravity 経由 3 経路**: 公式 Python SDK (`google.antigravity`) / コミュニティ ACP ラッパ (antigravity-acp) / agy への ACP native 実装 (公式 feature request 中)。agy 素体に serve 系なし (実測) | v0.2 spike (v5 の「✗」から昇格) | docs/architecture-ideal-vs-actual.md |
+
+### ACP 収束戦略 (v6 追加)
+
+gemini-cli / claude は `--acp` 実装済み、Grok Build は ACP 対応、agy は公式 request 中 —
+**ACP (Agent Client Protocol) が 4 者共通の統一接続口に収束する可能性が高い**。
+方針: v0.1 の relay adapter は席別実装で作るが、**interface を「席に text を届け、
+出力を回収する」1 契約に絞っておき、ACP が揃った時点で adapter を 1 本に置換できる形**にする。
 
 - Tier1 の位置づけ: CEO 禁止事項は「CLI で AI を**実行**する」こと。Tier1 はプロセスを
   起こさず、既存の席 (アプリで可視) へ turn を送るだけであり、履歴もアプリに残る
 - relay 層は adapter として分離し、席ごとに `tier` を seats.json に記録。
   Tier1 障害時は自動で Tier3 に縮退し、その旨を CEO に表示 (勝手に Tier2 へ昇格しない)
+- 補助発見: Codex app-server は `fs/readFile` / `fs/watch` 等の FS API も持つ —
+  scratch 出力の検証・監視を app-server 側からも行える可能性 (spike 1 の観察項目)
 
 ## 5. 実行フロー (1 議題)
 
@@ -114,12 +135,16 @@ prepared → delivered(tier 記録) → output-received → validated → merged
 
 ## 8. spike (実装前 go/no-go、各 30 分級)
 
-1. **Codex Tier1**: `app-server daemon` 起動 → `thread/start` + `turn/start` →
-   (a) アプリ一覧に席が見えるか (b) turn がアプリで読めるか (c) 席の agent が
-   scratch へファイルを書けるか。× なら Codex は Tier3 で v0.1 開始
+1. **Codex Tier1** (v6 更新: daemon でなく**自前 spawn + stdio**): `codex app-server` を
+   spawn → `initialize`/`initialized` handshake → `thread/start` (+ `thread/name` で
+   `rt-spike-codex` 命名) → `turn/start` → (a) アプリ一覧に席が見えるか (b) turn が
+   アプリで読めるか (c) 席の agent が scratch へファイルを書けるか
+   (d) `fs/readFile`/`fs/watch` で scratch 検証を補助できるか。× なら Codex は Tier3 で v0.1 開始
 2. **CC Tier1**: CCD send_message で別セッション (席) に packet を届けられるか。
    × なら Tier3
 3. spike の結果 (可否・制約) は docs/spike-results.md に記録し、seats.json の tier に反映
+4. (v0.2) **ACP 統一 spike**: Grok Build の ACP 接続で席が成立するか。成立すれば
+   relay adapter の 1 本化 (§4 ACP 収束戦略) を前倒し
 
 ## 9. テスト
 
@@ -143,8 +168,14 @@ codex + cc の 2 席 (tier は spike 結果に従う。**全席 Tier3 でも合�
 | 版 | 内容 |
 |---|---|
 | v0.1 | dispatcher (packet/watcher/journal) + spike 反映済み relay + codex/cc 2 席 |
-| v0.2 | Grok / Gemini 席追加。要約層 (non-authoritative)。コスト記録。Tier2 の承認フロー |
-| v0.3 | relay の完全自動化拡大 (公式 API の拡充追随)、議題テンプレ・得意分野プリセット |
+| v0.2 | Grok (serve/leader/ACP) / Gemini (Antigravity SDK or ACP) 席追加。要約層 (non-authoritative)。コスト記録。Tier2 の承認フロー。**blind-review round** (llm-council の匿名相互レビュー段階の輸入 — 司会が宣言する round 種別として) |
+| v0.3 | ACP 統一 adapter への置換 (§4)、議題テンプレ・得意分野プリセット |
+
+### 命名・ポジショニング (v6 追加, public 化時)
+
+- 「council」を自称しない (Karpathy llm-council = 自動 1 パス合議として定着済み)。
+  README 冒頭 3 行で差分を明示: **人間が座長 / アプリ課金のまま動く (API キー不要) /
+  議事録が監査可能な成果物**。詳細: references/llm-council-pattern.ja.md
 
 ## 12. 境界
 
@@ -154,7 +185,18 @@ codex + cc の 2 席 (tier は spike 結果に従う。**全席 Tier3 でも合�
 - 既存の作業チャットに触れない。席は専用新設
 - `--dangerously-skip-permissions` 不使用
 
-## 13. レビュー反映ログ (v5)
+## 13. レビュー反映ログ
+
+v5→v6 (2026-07-28, 機能変更なしの知見統合):
+| 変更 | 由来 |
+|---|---|
+| Codex Tier1 を「自前 spawn app-server + stdio」に確定 (daemon は Unix 専用と実測) | 実測 2026-07-27 + README 全文訳 |
+| 席別 Tier1 経路表 + Gemini を Tier1 候補に昇格 (Antigravity 3 経路) | 追加調査 2026-07-27 |
+| ACP 収束戦略 (adapter interface を 1 契約に絞る) | gemini-cli/claude --acp 実装済み + Grok ACP 対応 + agy request 中 |
+| fs API による scratch 検証補助を spike 観察項目に追加 | app-server README |
+| blind-review round を v0.2 に / council を自称しない | 先行事例調査 (llm-council ~23.3k★) |
+
+v5 分:
 
 | 継承 | 由来 |
 |---|---|
