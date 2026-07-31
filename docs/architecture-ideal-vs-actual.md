@@ -49,7 +49,7 @@ CEO（判断 + Gemini の分だけ貼り付けが残る）
 
 | # | 理想 | 現実 | 埋まるか |
 |---|---|---|---|
-| I1 コピペゼロ | Gemini だけ貼り付けが残る | **外部依存**。agy/Antigravity に serve 系がない (実測)。UI 自動化 (Tier2) なら埋まるが CEO 承認制。将来 Google が口を開ければ解消 |
+| I1 コピペゼロ | Gemini だけ貼り付けが残る | **要 spike に昇格 (2026-07-27 追加調査)**。agy 素体に serve 系はないが、(a) 公式 Python SDK (`google.antigravity`) (b) コミュニティ ACP ラッパ (antigravity-acp) (c) agy への ACP native 実装の公式 feature request、の 3 経路がある。残る検証点は Codex と同型:「プログラムから投げた会話がアプリ画面に出るか」 |
 | I2 全席 Tier1 | Codex/Grok は候補あり、CC はホストなので不要、Gemini ✗ | **3/4 まで可**。Codex は app-server (stable プロトコル・先行クライアント多数)。Windows で daemon 常駐だけ不可 → 自前 spawn + stdio で代替 (2026-07-27 実測) |
 | I3 画面リアルタイム | セッションストア共有は確認済み。**開いている画面への即時反映は未検証** | **不明 (spike 1 で判定)**。最悪でも「チャット一覧に席が出る・開けば読める」は成立見込み。DESIGN §10-6 で要件を 2 分割済み |
 | I4 改ざん不能 | 防止は不能 (アプリ agent の FS 権限を制御できない) → hash + git で**検知** | **設計変更なしでこれが上限**。検知 + fail-closed で監査は成立 |
@@ -58,9 +58,11 @@ CEO（判断 + Gemini の分だけ貼り付けが残る）
 
 ## 4. 判定
 
-- **作成できる**: 理想図は「Gemini 自動化」と「画面即時反映」を除いて全部こちらで実装可能。
-  この 2 つは相手側 (Google / OpenAI のアプリ実装) の問題で、待つか Tier2 (UI 自動化・承認制) で
-  埋めるかの選択。
+- **作成できる**: 理想図は「画面即時反映」(未検証) を除いてほぼ全部実装可能。
+  Gemini も Antigravity 経由 (SDK / ACP ラッパ / ACP native 化待ち) で Tier1 候補に昇格
+  (2026-07-27)。**ACP が 4 者共通の統一接続口に収束する可能性**があり
+  (gemini-cli / claude は `--acp` 実装済み、Grok Build も ACP 対応、agy は request 中)、
+  当たれば relay_* が 1 プロトコルに一本化できる。
 - 逆に言うと: **v0.1 (Tier3 のみ) → v0.2 (Codex/Grok を Tier1 化) と進めば、
   CEO の手作業は「Gemini への貼り付け」だけになる**。三者会談 (Codex×CC×Grok) なら
   理想図どおりコピペゼロが達成可能。
