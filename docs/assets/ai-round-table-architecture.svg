@@ -1,0 +1,110 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1680" height="2100" viewBox="0 0 1680 2100">
+  <!-- ai-round-table architecture (Quiet Chambers) — Figma 編集用 SVG
+       レイヤー構造: frame / title / chair / dispatcher / table / minutes / seats / legend -->
+  <defs>
+    <style>
+      .en   { font-family: 'Bricolage Grotesque','Helvetica Neue',Arial,sans-serif; }
+      .jp   { font-family: 'Meiryo','Hiragino Kaku Gothic ProN',sans-serif; }
+      .mono { font-family: 'Consolas','SF Mono',monospace; }
+    </style>
+  </defs>
+
+  <g id="frame">
+    <rect width="1680" height="2100" fill="#101218"/>
+    <rect x="56" y="56" width="1568" height="1988" fill="none" stroke="#484C58" stroke-width="2"/>
+    <rect x="64" y="64" width="1552" height="1972" fill="none" stroke="#282B34" stroke-width="1"/>
+  </g>
+
+  <g id="title">
+    <text x="840" y="172" class="en" font-size="74" font-weight="700" fill="#E8E3D6" text-anchor="middle" letter-spacing="4">AI ROUND-TABLE</text>
+    <text x="840" y="222" class="en" font-size="21" fill="#787C88" text-anchor="middle">the cartography of dialogue — chat-first, human-chaired</text>
+  </g>
+
+  <g id="chair">
+    <text x="840" y="264" class="en" font-size="26" fill="#E8E3D6" text-anchor="middle">CHAIR — HUMAN</text>
+    <text x="840" y="296" class="jp" font-size="22" fill="#787C88" text-anchor="middle">議題 ・ 指名 ・ 裁定</text>
+    <circle cx="840" cy="340" r="42" fill="none" stroke="#E8E3D6" stroke-width="4"/>
+    <path d="M 828 340 H 852 M 840 328 V 352" stroke="#E8E3D6" stroke-width="2"/>
+    <line x1="840" y1="386" x2="840" y2="644" stroke="#E8E3D6" stroke-width="2"/>
+  </g>
+
+  <g id="dispatcher">
+    <circle cx="840" cy="515" r="30" fill="#101218" stroke="#787C88" stroke-width="2"/>
+    <g stroke="#787C88" stroke-width="2">
+      <line x1="870" y1="515" x2="878" y2="515"/><line x1="802" y1="515" x2="810" y2="515"/>
+      <line x1="840" y1="485" x2="840" y2="477"/><line x1="840" y1="545" x2="840" y2="553"/>
+      <line x1="866" y1="500" x2="873" y2="496"/><line x1="807" y1="534" x2="814" y2="530"/>
+      <line x1="866" y1="530" x2="873" y2="534"/><line x1="807" y1="496" x2="814" y2="500"/>
+    </g>
+    <text x="1008" y="522" class="en" font-size="26" fill="#787C88">dispatcher</text>
+    <text x="1008" y="552" class="en" font-size="21" fill="#5A5E6A">packets · watch · merge</text>
+  </g>
+
+  <g id="table">
+    <circle cx="840" cy="1120" r="470" fill="none" stroke="#E8E3D6" stroke-width="3"/>
+    <circle cx="840" cy="1120" r="456" fill="none" stroke="#484C58" stroke-width="1"/>
+    <circle cx="840" cy="1120" r="600" fill="none" stroke="#343742" stroke-width="2" stroke-dasharray="2 9"/>
+  </g>
+
+  <g id="minutes">
+    <circle cx="840" cy="1120" r="64"  fill="none" stroke="#E8E3D6" stroke-width="2"/>
+    <circle cx="840" cy="1120" r="104" fill="none" stroke="#E8E3D6" stroke-width="2"/>
+    <circle cx="840" cy="1120" r="144" fill="none" stroke="#E8E3D6" stroke-width="2"/>
+    <circle cx="840" cy="1120" r="10" fill="#E8E3D6"/>
+    <circle cx="840" cy="1120" r="154" fill="none" stroke="#787C88" stroke-width="1" stroke-dasharray="1 31"/>
+    <text x="906" y="1064" class="mono" font-size="22" fill="#787C88">R1</text>
+    <text x="934" y="1036" class="mono" font-size="22" fill="#787C88">R2</text>
+    <text x="962" y="1008" class="mono" font-size="22" fill="#787C88">R3</text>
+    <text x="840" y="1336" class="en" font-size="26" fill="#E8E3D6" text-anchor="middle">MINUTES</text>
+    <text x="840" y="1370" class="en" font-size="21" fill="#787C88" text-anchor="middle">append-only · hash-verified</text>
+  </g>
+
+  <g id="seats">
+    <g id="seat-codex">
+      <line x1="296" y1="866" x2="414" y2="921" stroke="#D6A03E" stroke-width="3"/>
+      <line x1="414" y1="921" x2="688" y2="1049" stroke="#8B7040" stroke-width="1"/>
+      <circle cx="296" cy="866" r="26" fill="#101218" stroke="#D6A03E" stroke-width="4"/>
+      <circle cx="296" cy="866" r="9" fill="#D6A03E"/>
+      <text x="296" y="782" class="en" font-size="26" fill="#D6A03E" text-anchor="middle">CODEX</text>
+      <text x="296" y="814" class="en" font-size="21" fill="#787C88" text-anchor="middle">app-server · stdio</text>
+    </g>
+    <g id="seat-grok">
+      <line x1="1384" y1="866" x2="1266" y2="921" stroke="#5E9EB2" stroke-width="3"/>
+      <line x1="1266" y1="921" x2="992" y2="1049" stroke="#4F7582" stroke-width="1"/>
+      <circle cx="1384" cy="866" r="26" fill="#101218" stroke="#5E9EB2" stroke-width="4"/>
+      <circle cx="1384" cy="866" r="9" fill="#5E9EB2"/>
+      <text x="1384" y="782" class="en" font-size="26" fill="#5E9EB2" text-anchor="middle">GROK</text>
+      <text x="1384" y="814" class="en" font-size="21" fill="#787C88" text-anchor="middle">serve · leader · acp</text>
+    </g>
+    <g id="seat-claude">
+      <line x1="348" y1="1464" x2="455" y2="1390" stroke="#C45C4A" stroke-width="3"/>
+      <line x1="455" y1="1390" x2="702" y2="1216" stroke="#8A5648" stroke-width="1"/>
+      <circle cx="348" cy="1464" r="26" fill="#101218" stroke="#C45C4A" stroke-width="4"/>
+      <circle cx="348" cy="1464" r="9" fill="#C45C4A"/>
+      <text x="348" y="1548" class="en" font-size="26" fill="#C45C4A" text-anchor="middle">CLAUDE</text>
+      <text x="348" y="1580" class="en" font-size="21" fill="#787C88" text-anchor="middle">host / ccd</text>
+    </g>
+    <g id="seat-gemini">
+      <line x1="1332" y1="1464" x2="1225" y2="1390" stroke="#7C966A" stroke-width="3" stroke-dasharray="8 8"/>
+      <line x1="1225" y1="1390" x2="978" y2="1216" stroke="#5E6F54" stroke-width="1" stroke-dasharray="5 8"/>
+      <circle cx="1332" cy="1464" r="26" fill="#101218" stroke="#7C966A" stroke-width="4"/>
+      <circle cx="1332" cy="1464" r="9" fill="#7C966A"/>
+      <text x="1332" y="1548" class="en" font-size="26" fill="#7C966A" text-anchor="middle">GEMINI</text>
+      <text x="1332" y="1580" class="en" font-size="21" fill="#787C88" text-anchor="middle">antigravity · relay</text>
+    </g>
+  </g>
+
+  <g id="legend">
+    <line x1="220" y1="1800" x2="1460" y2="1800" stroke="#484C58" stroke-width="1"/>
+    <line x1="240" y1="1856" x2="336" y2="1856" stroke="#E8E3D6" stroke-width="3"/>
+    <text x="240" y="1898" class="en" font-size="21" fill="#E8E3D6">tier 1 — official api</text>
+    <text x="240" y="1926" class="en" font-size="21" fill="#5A5E6A">relay: zero touch</text>
+    <line x1="660" y1="1856" x2="756" y2="1856" stroke="#E8E3D6" stroke-width="3" stroke-dasharray="7 9"/>
+    <text x="660" y="1898" class="en" font-size="21" fill="#E8E3D6">tier 3 — human relay</text>
+    <text x="660" y="1926" class="en" font-size="21" fill="#5A5E6A">carried by hand</text>
+    <circle cx="1088" cy="1862" r="12" fill="none" stroke="#D6A03E" stroke-width="3"/>
+    <text x="1120" y="1870" class="en" font-size="21" fill="#E8E3D6">seat = app chat</text>
+    <text x="1120" y="1898" class="en" font-size="21" fill="#5A5E6A">history stays native</text>
+    <text x="840" y="1980" class="en" font-size="26" fill="#787C88" text-anchor="middle">no api keys · four voices · one record</text>
+  </g>
+</svg>
