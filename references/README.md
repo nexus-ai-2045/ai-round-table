@@ -9,7 +9,7 @@
 |---|---|---|---|
 | **A: 浅 clone** | 深く読む小規模 OSS (例: codex-client, llm-council) | `~/Projects/Documents/.repos/external/<name>` に `git clone --depth 1`。読み取り専用 (改変しない) | `nexus_ai/config/repository_path_migration.json` に repo_class: external_oss_reference で登録。pinned commit を記録 |
 | **B: ファイル snapshot** | 巨大 repo の一部だけ要るもの (例: openai/codex の app-server README/protocol) | 本ディレクトリに `<slug>.snapshot.md` として保存。冒頭に取得日 / 原典 URL / commit を明記 | 本 README の一覧表 |
-| **C: 日本語要約** | 記事・ブログ・調査で得た知見 | 本ディレクトリに `<slug>.ja.md`。原文コピーせず要約 + 出典 URL | 同上 |
+| **C: ページ単位の日本語化** (2026-07-27 CEO 指示で強化) | 参考にしたページすべて | 本ディレクトリに `<slug>.ja.md` を**ページ単位**で保存。(a) OSS ライセンスの原典 (repo README / docs) → **全文日本語訳** + ライセンス表記 (b) 著作権ページ (ブログ・公式 docs) → 原文の**章立てを保ち情報を落とさない日本語ノート** (全文逐語訳はしない) + 出典 URL。どちらも「後から原典を見なくても設計判断が再現できる」水準を合格線とする | 同上 |
 
 規約:
 - ファイル冒頭に必ず: `取得日 / 原典 / 版 (commit・日付) / 種別 (A|B|C) / 未確認事項`
