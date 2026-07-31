@@ -1,0 +1,26 @@
+# レビュー依頼: v0.1 実装計画 + spike 提案 (from CEO)
+
+以下の 2 ファイルを読んでレビューしてください (ローカルファイルが読める前提。読めなければ
+「読めない」と返答してください — 全文を貼り直します):
+
+1. C:/Users/yas/Projects/Documents/.repos/nexus_ai/private/ai-roundtable/docs/plans/2026-07-27-v0.1-implementation.md
+2. C:/Users/yas/Projects/Documents/.repos/nexus_ai/private/ai-roundtable/docs/spike-plan.md
+3. 設計本体 (前提): 同 docs/DESIGN.md (v5, あなたが前回 GO した chat-first 設計)
+
+## 観点 (運用者・発注者の目線で)
+
+1. **タスクの抜け**: DESIGN v5 の要求で、この計画のどのタスクにも実装されないものはあるか
+2. **順序とリスク**: Phase 1 (Tier3 核) → spike → Phase 2 (Tier1) の順は正しいか。
+   先に spike をやるべき理由はあるか
+3. **テストの穴**: 各タスクのテストは「その実装の一番壊れやすい所」を突いているか。
+   特に watcher の TOCTOU、Windows 固有 (パス・エンコーディング・clip.exe) の見落とし
+4. **YAGNI**: v0.1 に不要なタスク・過剰な仕組みはないか
+5. **受け入れ基準**: 「CEO の操作が判断のみで完結」を本当に検証できる形になっているか
+
+## 出力形式
+
+- 指摘: 欠陥 / 破綻シナリオ / 修正案 + severity (HIGH/MED/LOW)
+- 問題がなければ「実装開始してよい」と明言 + 残る条件
+- 出力はこのチャットに返答でよい (ファイル書き込み可能なら
+  scratch/gpt-plan-review-reply.md に保存でも可)
+- 日本語で
