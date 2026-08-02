@@ -1,10 +1,12 @@
-"""議事録の生成・snapshot・hash・atomic write・frontmatter 読み。
+"""議事録の生成・snapshot・hash・atomic write・merge。
 
 書き込みはすべて tmp → os.replace の atomic 経路 (部分書き込みを構造的に排除)。
 Windows の一時ロック (エディタ/AV の共有違反 = WinError 32) に備えて短い retry を持つ。
+merge は hash 照合 fail-closed + escape による予約見出し防御を担う (DESIGN v6 D6/D7)。
 """
 import hashlib
 import os
+import re
 import tempfile
 import time
 from pathlib import Path
@@ -24,6 +26,10 @@ verdict:
 ## 背景
 
 """
+
+
+class MinutesTamperedError(Exception):
+    """merge 前 hash 照合に失敗 (議事録が dispatcher 外で変更された)。fail-closed の根拠。"""
 
 
 def atomic_write(path: Path, text: str) -> None:
@@ -69,3 +75,60 @@ def parse_participants(tp: TopicPaths) -> list[str]:
             inner = line.split("[", 1)[1].rsplit("]", 1)[0]
             return [p.strip() for p in inner.split(",") if p.strip()]
     raise ValueError(f"participants 行が見つからない: {tp.minutes}")
+
+
+def _escape_body(body: str) -> str:
+    """本文用 escape: 行頭 # と frontmatter 区切り --- を無効化 (予約見出し防御)。"""
+    out = []
+    for line in body.splitlines():
+        if line.lstrip().startswith("#") or line.strip() == "---":
+            line = "\\" + line
+        out.append(line)
+    return "\n".join(out)
+
+
+def _escape_cell(value: str) -> str:
+    """表セル用: | を \\| に、改行を <br> に。改行→行頭# の見出し注入を構造的に不能にする。"""
+    return value.replace("|", "\\|").replace("\r", "").replace("\n", "<br>")
+
+
+def merge_opinion(tp: TopicPaths, opinion: dict, round_no: int, base_hash: str) -> None:
+    """検証済み意見を議事録へ追記する。
+
+    base_hash は snapshot 採取時のものを渡すこと。その場で再計算した hash を
+    渡すと照合が常に一致し、改ざん検知が無力化する (内部レビュー #2 の罠)。
+    """
+    if sha256(tp.minutes) != base_hash:
+        raise MinutesTamperedError(f"minutes hash mismatch: {tp.minutes}")
+    text = tp.minutes.read_text(encoding="utf-8")
+    section = [
+        f"\n## Round {round_no}" if f"## Round {round_no}" not in text else None,
+        f"\n### {opinion['participant']} (invocation: {opinion['invocation_id']})",
+        "",
+        _escape_body(opinion["opinion"]),
+        "",
+        "| claim | evidence_type | evidence |",
+        "|---|---|---|",
+    ]
+    for c in opinion["claims"]:
+        section.append(
+            f"| {_escape_cell(c['claim'])} | {c['evidence_type']} | {_escape_cell(c['evidence'])} |"
+        )
+    atomic_write(tp.minutes, text + "\n".join(s for s in section if s is not None) + "\n")
+
+
+def write_verdict(tp: TopicPaths, verdict: str) -> None:
+    """CEO の裁定を記録して close。裁定はこの機械経路からのみ書かれる (偽装防止)。"""
+    text = tp.minutes.read_text(encoding="utf-8")
+    text = text.replace("status: open", "status: closed", 1)
+    text = text.replace("verdict:", f"verdict: {verdict}", 1)
+    atomic_write(tp.minutes, text)
+
+
+def sync_round(tp: TopicPaths, round_no: int) -> None:
+    """frontmatter の round: 表示を journal と同期 (CEO が議事録を直接見るため)。"""
+    text = tp.minutes.read_text(encoding="utf-8")
+    atomic_write(
+        tp.minutes,
+        re.sub(r"^round: \d+$", f"round: {round_no}", text, count=1, flags=re.MULTILINE),
+    )
