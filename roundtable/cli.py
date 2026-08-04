@@ -77,19 +77,24 @@ def _cmd_status(args) -> int:
 
 
 def _cmd_close(args) -> int:
-    """失敗一覧を必ず表示してから verdict を記入して close する (失敗を隠さない)。"""
+    """未解決一覧を必ず表示してから verdict を記入して close する (偽装成功防止)。
+
+    failed だけでなく merged 未到達の全状態を見せる (レビュー M3):
+    Ctrl+C・clip 失敗・クラッシュで途中状態に残った invocation を「失敗なし」と
+    誤認させない。
+    """
     tp = ensure_topic(Path(args.root), args.slug)
     journal = Journal.load(tp)
-    failures = journal.failures()
-    if failures:
-        print(f"失敗一覧 ({len(failures)} 件):")
-        for f in failures:
+    unresolved = journal.unresolved()
+    if unresolved:
+        print(f"未解決一覧 ({len(unresolved)} 件) — merged に到達していない invocation:")
+        for f in unresolved:
             print(
                 f"  {f['invocation']}  {f['participant']}  round={f['round']}  "
-                f"detail: {f['detail']}"
+                f"state={f['state']}  detail: {f['detail']}"
             )
     else:
-        print("失敗なし。")
+        print("未解決なし (全 invocation が merged)。")
     minutes.write_verdict(tp, args.verdict)
     print(f"closed: verdict: {args.verdict}")
     return 0
