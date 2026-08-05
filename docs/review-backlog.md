@@ -15,4 +15,12 @@ H1 (TOCTOU) と M1-M4 は修正済み。以下 LOW は v0.1 では記録のみ (
 | L8 | watcher 経由の schema 失敗経路にテストなし | v0.2 (結線テスト追加) |
 | L9 | merge_opinion 単体は participant/invocation_id を無 escape (watcher が唯一の防壁) | v0.2 (defense-in-depth) |
 
+## 実席 smoke で判明した v0.1 の穴 (2026-08-05)
+
+| # | 内容 | 対応予定 |
+|---|---|---|
+| S1 | 議題の「背景」を書く CLI コマンドがない (今回は python から直接 atomic_write した) | v0.2 (`new-topic --background` or `set-background`) |
+| S2 | dispatch を `| tail -N` に通すと exit code が tail のものになり、timeout 失敗が成功に見える | PROTOCOL.md に「dispatch はパイプに通さない」を明記 (v0.2) |
+| S3 | Tier3 で「貼り付けたか」を機械的に知る手段がない。delivered のまま timeout しても未貼付/席無応答の区別がつかない | v0.2 (Tier1 化で解消、または packet に ack ファイルを足す) |
+
 原本: workflow 出力 (scratch には保存せず、本台帳を正とする)
