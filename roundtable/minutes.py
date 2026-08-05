@@ -78,10 +78,23 @@ def parse_participants(tp: TopicPaths) -> list[str]:
 
 
 def _escape_body(body: str) -> str:
-    """本文用 escape: 行頭 # と frontmatter 区切り --- を無効化 (予約見出し防御)。"""
+    """本文用 escape: 見出しに化けうる行をすべて無効化する (予約見出し防御, レビュー M1)。
+
+    対象: ATX 見出し (#) / frontmatter・setext H2 (---) / setext H1 (= のみの行) /
+    コードフェンス (``` ~~~ — 未閉フェンスは以降の描画を乗っ取る) / 引用 (> — 引用内見出し)。
+    """
     out = []
     for line in body.splitlines():
-        if line.lstrip().startswith("#") or line.strip() == "---":
+        s = line.strip()
+        head = line.lstrip()
+        if (
+            head.startswith("#")
+            or s == "---"
+            or (s != "" and set(s) == {"="})
+            or head.startswith("```")
+            or head.startswith("~~~")
+            or head.startswith(">")
+        ):
             line = "\\" + line
         out.append(line)
     return "\n".join(out)
@@ -98,11 +111,17 @@ def merge_opinion(tp: TopicPaths, opinion: dict, round_no: int, base_hash: str) 
     base_hash は snapshot 採取時のものを渡すこと。その場で再計算した hash を
     渡すと照合が常に一致し、改ざん検知が無力化する (内部レビュー #2 の罠)。
     """
-    if sha256(tp.minutes) != base_hash:
+    # check/use を単一 read に統一 (TOCTOU 防止): 照合した bytes と同じ bytes から本文を得る。
+    # 別々に read すると「照合時は原本・読取時は改ざん版」を踏むレースが成立する (レビュー H1)。
+    raw = tp.minutes.read_bytes()
+    if hashlib.sha256(raw).hexdigest() != base_hash:
         raise MinutesTamperedError(f"minutes hash mismatch: {tp.minutes}")
-    text = tp.minutes.read_text(encoding="utf-8")
+    text = raw.decode("utf-8")
+    # Round 見出しの存在判定は行頭完全一致で行う。部分文字列だと escape 済み本文中の
+    # 「\## Round N」に誤反応し、敵対 opinion が本物の見出し生成を抑止できる (レビュー M2)。
+    round_heading_exists = re.search(rf"^## Round {round_no}$", text, re.MULTILINE)
     section = [
-        f"\n## Round {round_no}" if f"## Round {round_no}" not in text else None,
+        None if round_heading_exists else f"\n## Round {round_no}",
         f"\n### {opinion['participant']} (invocation: {opinion['invocation_id']})",
         "",
         _escape_body(opinion["opinion"]),

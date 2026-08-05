@@ -70,5 +70,17 @@ class Journal:
             if v["state"] == "failed"
         ]
 
+    def unresolved(self) -> list[dict]:
+        """merged に到達していない全 invocation。
+
+        close 時の偽装成功防止 (レビュー M3): failed だけでなく、Ctrl+C や clip 失敗で
+        prepared / delivered / output-received / validated に残ったものも CEO に見せる。
+        """
+        return [
+            {"invocation": k, **v}
+            for k, v in self.data["invocations"].items()
+            if v["state"] != "merged"
+        ]
+
     def save(self) -> None:
         atomic_write(self.tp.journal, json.dumps(self.data, ensure_ascii=False, indent=1))
