@@ -45,6 +45,20 @@
 | thread/start パラメータ不足 | list は成功、start/resume/turn 全滅 | パラメータより **接続先 (spawn vs desktop)** が支配項 |
 | fallback が支配的 | 実測どおり常時 fallback | v0.2 運用は Tier3 前提でよい |
 
+## Desktop 接続 spike (2026-08-07 追記 2)
+
+| 手順 | 結果 | 証拠 |
+|---|---|---|
+| `$CODEX_HOME/app-server-control/*.sock` | **不在** | ディレクトリ自体が無い |
+| `codex app-server proxy` (default) | **fail** | `failed to connect to socket` / WinError 10050 |
+| 自前 `--listen unix://` + proxy | sock ファイルは作れるが **INIT 不可** | proxy は websocket フレーム前提 |
+| 自前 `--listen ws://127.0.0.1:PORT` | **initialize OK** | healthz あり |
+| 同上 `thread/start` | **timeout (60s でも無応答)** | skill YAML エラーは stderr に出るが応答なし |
+| 結論 | Desktop 接続 **no-go (現状)** | 修復ではなく `roundtable doctor` で検知する |
+
+**やらないこと**: thread/start の全パラメータ総当り / 壊れた skill YAML の一括修正 / Tier2 UI 自動化。
+次の観測点は「Desktop が control socket を作り始めたか」だけ (`doctor` の `desktop_socket_exists`)。
+
 ## 運用コマンド (実席 = Tier3)
 
 ```powershell
