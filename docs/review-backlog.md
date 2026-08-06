@@ -73,3 +73,17 @@ Tier1 の書込範囲を議題配下に絞ったので露出は減ったが、�
 (将来の CLI・ツール) は root 外を指せる状態だった → 合成と検証を同じ場所に置くよう修正。
 
 全 suite 49 → **113 passed**。
+
+## Codex bot レビュー (PR #5, 2026-08-06) — 対応
+
+| # | 判定 | 内容 | 対応 |
+|---|---|---|---|
+| P1-a | **却下 (指摘が誤り)** | 「sandbox は camelCase `workspaceWrite` を送れ」 | スキーマで確定: `thread/start.sandbox` の型は **`SandboxMode` = `["read-only", "workspace-write", "danger-full-access"]`** で **hyphen が正**。camelCase は `turn/start.sandboxPolicy` (型 `SandboxPolicy` のオブジェクト `{"type": "workspaceWrite"}`) の話で、bot が README の turn 例を thread と混同している。変更しない |
+| P1-b | 採用 | 非 Windows で子孫が回収されない | `_ProcessTree` を新設。POSIX は `start_new_session=True` + `killpg` |
+| P1-c | 採用 | Windows で terminate 成功時に木の掃除を飛ばす | **Job Object + `KILL_ON_JOB_CLOSE`** に変更。ハンドルを閉じた時点で木ごと終わるので、terminate が成功した経路でも取りこぼさない |
+| P2 | 採用 | 相対 `--root` だと cwd が二重解決される | `str(tp.root.resolve())` を渡す |
+
+検証: `tests/test_v02_tier1_hardening.py` に 3 本追加 (POSIX グループ分離 / terminate 成功時の木回収 / 相対 root の絶対化)。全 suite **115 passed**。
+
+一次情報: `codex app-server generate-json-schema` の `ClientRequest.json` →
+`definitions.SandboxMode` / `definitions.SandboxPolicy` / `definitions.AskForApproval`。

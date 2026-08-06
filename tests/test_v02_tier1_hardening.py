@@ -58,6 +58,9 @@ def test_spawn_forces_utf8(monkeypatch):
         relay._ensure()
     assert seen["encoding"] == "utf-8"
     assert seen["cwd"] == "/tmp/topic"  # spawn 時の cwd も席スコープに寄せる
+    # POSIX ではプロセスグループを分離する (木ごと殺せるようにする)
+    import os as _os
+    assert ("start_new_session" in seen) == (_os.name != "nt")
 
 
 def test_thread_start_pins_sandbox_and_never_ephemeral(monkeypatch):
@@ -86,14 +89,28 @@ def test_thread_start_pins_sandbox_and_never_ephemeral(monkeypatch):
     assert start["cwd"] == "/tmp/topic"
 
 
+def test_close_reaps_tree_even_when_terminate_succeeds(monkeypatch):
+    """親が素直に終わっても木を掃除する (TerminateProcess は子孫を殺さない)。"""
+    proc = _FakeProc(alive_after_terminate=False)
+    reaped = []
+    monkeypatch.setattr(
+        "roundtable.relay_codex._ProcessTree.close",
+        lambda self: reaped.append(True),
+    )
+    relay = CodexAppServerRelay()
+    relay._proc = proc
+    relay.close()
+    assert reaped, "terminate 成功経路でも木の回収を通ること"
+
+
 def test_close_kills_process_tree_when_terminate_fails(monkeypatch):
     """terminate で死ななければ子孫ごと kill する (孤児プロセス防止)。"""
     proc = _FakeProc(alive_after_terminate=True)
     killed = {}
 
     monkeypatch.setattr(
-        "roundtable.relay_codex._kill_process_tree",
-        lambda pid: killed.setdefault("pid", pid),
+        "roundtable.relay_codex._ProcessTree.kill_tree",
+        lambda self, pid: killed.setdefault("pid", pid),
     )
     relay = CodexAppServerRelay()
     relay._proc = proc
@@ -146,5 +163,26 @@ def test_cli_scopes_cwd_to_topic_dir(tmp_path, monkeypatch):
     main(["dispatch", "t1", "--participant", "codex", "--timeout", "0.1",
           "--root", str(tmp_path)])
 
-    assert seen["cwd"] == str(ensure_topic(tmp_path, "t1").root)
+    assert seen["cwd"] == str(ensure_topic(tmp_path, "t1").root.resolve())
     assert seen["cwd"] != str(tmp_path)
+
+
+def test_cli_cwd_is_absolute_for_relative_root(tmp_path, monkeypatch):
+    """相対 --root でも絶対パスを渡す。spawn 先で二重解決になるのを防ぐ (P2)。"""
+    import os
+
+    seen = {}
+    real_get_relay = relay_mod.get_relay
+
+    def spy_get_relay(participant, tier=3, allow_fallback=True, cwd=None):
+        seen["cwd"] = cwd
+        return real_get_relay(participant, tier=3, allow_fallback=allow_fallback)
+
+    monkeypatch.setattr("roundtable.cli.get_relay", spy_get_relay)
+    monkeypatch.setattr("roundtable.relay_tier3.Tier3Relay.send", lambda self, s, t: "tier3")
+    monkeypatch.chdir(tmp_path)
+
+    main(["new-topic", "t1", "--topic", "X", "--participants", "codex", "--root", "."])
+    main(["dispatch", "t1", "--participant", "codex", "--timeout", "0.1", "--root", "."])
+
+    assert os.path.isabs(seen["cwd"]), f"相対パスが漏れている: {seen['cwd']}"
