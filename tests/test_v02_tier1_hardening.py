@@ -199,5 +199,5 @@ def test_timeouts_have_margin_over_measured_latency():
     from roundtable import relay_codex as rc
 
     assert rc.TIMEOUT_INITIALIZE >= 30, "実測 6.66s に対し余裕がない"
-    assert rc.TIMEOUT_THREAD_START >= 60, "実測 20.9s に対し余裕がない (5s だと必ず落ちる)"
+    assert rc.TIMEOUT_THREAD_START >= 240, "実測 20.9-58.4s + 負荷時 120s 超に対し余裕がない"
     assert rc.TIMEOUT_TURN_START >= 60

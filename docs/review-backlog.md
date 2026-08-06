@@ -110,3 +110,33 @@ dispatch したところ `thread/start: timeout after 5s` で Tier3 に縮退し
 
 **副産物**: 実サーバが `sandbox: "workspace-write"` (hyphen) を受理した。Codex bot の
 camelCase 指摘 (PR #5 P1-a) が誤りであることが、schema に加えて**実測でも裏付けられた**。
+
+## Tier1 実往復 成功 (2026-08-06) — 3 段構えの真因
+
+`tier1-final` 議題で **Tier1 が初めて実環境で成立**した。
+
+```
+seats.json  tier: 1 / thread_ref: 019fd900-... (fallback_reason なし)
+journal     merged / human_actions: ['new-topic', 'dispatch']  ← paste 0 回
+minutes     Round 1 に codex の意見 + claims 表 (evidence_type=observed) が merge 済み
+```
+
+**KPI 実測: 人間の操作 2 回** (受け入れ基準 ≤ 3 を満たす)。
+
+### 真因は 3 層あり、1 つ直しても症状が変わらなかった
+
+| # | 症状 | 真因 | 修正 |
+|---|---|---|---|
+| 1 | `thread/start: timeout after 5s` | 実測 20.9s に対し既定 5s | 300s 枠 (実測レンジ 20.9-58.4s + 負荷時 120s 超) |
+| 2 | 120s でも無応答 | **PATH 先頭の古い codex 0.130.0-alpha.5 を spawn**。この版の app-server は `thread/start` に永久に応答しない (initialize には 1.3s で返す) | `resolve_codex_binary()` — PATH 候補を全部 `--version` 検査し 0.144 以上を選ぶ |
+| 3 | 修正後も timeout | pytest 等の**並走負荷**。app-server の応答時間は idle 58.4s / 負荷時 120s 超と極端にばらつく | timeout 枠を実測レンジ基準に |
+
+**学び**: 症状 (timeout) が同じで原因が複数層あると、片方を直しても症状が変わらず「直した判断」自体を疑ってしまう。probe (素の実装) と実装経路を**両方**測って差分を取るのが正しい切り分けだった。実際 2 回誤診した (「並行負荷が主因」「バイナリ修正で解決」)。
+
+### 未確認のまま残る 1 点 (要件の核心)
+
+**thread がアプリのチャット一覧に出るか**は未確認。共有セッションストア
+(`~/.codex/sessions/2026/08/07/rollout-*.jsonl`, `originator: ai-round-table`) には
+**実在を確認済み**だが、アプリ UI が `originator` で絞る等の可能性は排除できていない。
+DESIGN v6 §10 未検証事項 #1 として最初から開いており、CEO の目視でのみ閉じられる。
+ここが × なら「送れるが席にならない」= 要件未達で、方式の見直しが要る。
