@@ -40,8 +40,20 @@ def default_control_socket() -> Path:
     return Path(home) / "app-server-control" / "app-server-control.sock"
 
 
-def _which_codex(binary: str = "codex") -> str | None:
-    return shutil.which(binary)
+def _which_codex(binary: str | None = "codex") -> str | None:
+    """app-server が使える codex を選ぶ。
+
+    素の shutil.which("codex") は PATH 先頭を返すが、そこに古い版 (0.130 系) が
+    あると **thread/start に永久に応答しない** (2026-08-06 実測)。doctor がその
+    バイナリで診断すると、環境が正常でも必ず「Tier1 不可・Tier3 推奨」と誤答する。
+    版を見て選ぶ resolve_codex_binary に委譲する。
+    """
+    from .relay_codex import resolve_codex_binary
+
+    if binary and binary != "codex":
+        return shutil.which(binary) or binary  # 明示指定は尊重する
+    resolved = resolve_codex_binary()
+    return resolved if Path(resolved).exists() else shutil.which(resolved)
 
 
 def _probe_proxy(binary: str, sock: Path, timeout: float = 2.0) -> str:
@@ -131,17 +143,19 @@ def _notify(proc, method: str, params: dict) -> None:
 
 
 def run_doctor(
-    binary: str = "codex",
+    binary: str | None = None,
     *,
     probe_start: bool = True,
-    start_timeout: float = 5.0,
+    # 実測 (2026-08-06): thread/start は idle 20.9-58.4s、負荷時 120s 超。
+    # 5.0 では必ず timeout し、環境が正常でも Tier1 を no-go と誤判定する。
+    start_timeout: float = 180.0,
     cwd: str | None = None,
 ) -> DoctorReport:
     notes: list[str] = []
     path = _which_codex(binary)
     sock = default_control_socket()
     sock_exists = sock.exists()
-    proxy = _probe_proxy(binary, sock) if path else "error:codex not found"
+    proxy = _probe_proxy(path, sock) if path else "error:codex not found"
 
     spawn_init = "skipped"
     thread_list = "skipped"
@@ -150,7 +164,7 @@ def run_doctor(
     if path:
         proc = None
         try:
-            proc, q = _stdio_session(binary, cwd=cwd)
+            proc, q = _stdio_session(path, cwd=cwd)  # 解決済みの実体を使う (binary は要求値)
             r1 = _rpc(
                 proc,
                 q,

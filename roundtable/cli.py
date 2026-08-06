@@ -292,10 +292,10 @@ def _build_parser() -> argparse.ArgumentParser:
     p_cl.set_defaults(func=_cmd_close)
 
     p_doc = sub.add_parser("doctor", help="Codex Tier1 / 実席経路の環境診断")
-    p_doc.add_argument("--binary", default="codex", help="codex 実行ファイル")
+    p_doc.add_argument("--binary", default=None, help="codex 実行ファイル")
     p_doc.add_argument("--root", default="", help="thread/start に渡す cwd (任意)")
     p_doc.add_argument("--skip-start", action="store_true", help="thread/start プローブを省略")
-    p_doc.add_argument("--start-timeout", type=float, default=5.0, help="start プローブ秒")
+    p_doc.add_argument("--start-timeout", type=float, default=180.0, help="start プローブ秒")
     p_doc.add_argument("--json", action="store_true", help="JSON も追加出力")
     p_doc.set_defaults(func=_cmd_doctor)
 

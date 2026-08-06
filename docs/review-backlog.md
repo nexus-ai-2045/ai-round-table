@@ -140,3 +140,36 @@ minutes     Round 1 に codex の意見 + claims 表 (evidence_type=observed) �
 **実在を確認済み**だが、アプリ UI が `originator` で絞る等の可能性は排除できていない。
 DESIGN v6 §10 未検証事項 #1 として最初から開いており、CEO の目視でのみ閉じられる。
 ここが × なら「送れるが席にならない」= 要件未達で、方式の見直しが要る。
+
+## PR #6 の no-go 判定を撤回 (2026-08-07)
+
+PR #6 (別セッション, merge 済み) は「Desktop attach no-go / `thread/start` timeout /
+実席は Tier3 貼付を推奨」と結論した。**これは doctor 自身が持つ 2 つのバグによる誤判定**で、
+同一環境で条件を直すと判定が反転する。
+
+### doctor が内蔵していた 2 バグ
+
+| 箇所 | 問題 | 修正 |
+|---|---|---|
+| `_which_codex` | `shutil.which("codex")` は PATH 先頭を返す。そこに **0.130.0-alpha.5** があり、この版の app-server は `thread/start` に**永久に応答しない** (`initialize` には 1.3s で返す) | `resolve_codex_binary()` に委譲 (PATH 候補を `--version` 検査し 0.144 以上を選ぶ) |
+| `start_timeout` | 既定 **5.0s**。実測は idle 20.9-58.4s / 負荷時 120s 超 | **180.0s** |
+
+環境が正常でも必ず「Tier1 不可」と答える doctor の出力を根拠に no-go 判定が出ており、循環していた。
+
+### 同一環境での前後比較 (機械の出力)
+
+| 項目 | 修正前 (PR #6) | 修正後 |
+|---|---|---|
+| `codex_binary` | (PATH 先頭 = 0.130) | `npm-global\codex.cmd` (0.144.6) |
+| `thread_start` | **timeout** | **ok** |
+| `recommended_tier` | **3** | **1** |
+| `real_seat_path` | tier3-clipboard-paste | **tier1-app-server** |
+
+### 実往復の裏付け
+
+`minutes/tier1-final/`: `tier=1` / `merged` / `human_actions: ['new-topic','dispatch']` (paste 0)。
+議事録 Round 1 に codex の意見 + claims 表 (evidence_type=observed) が merge 済み。
+
+**なお Desktop control socket が無いこと自体は PR #6 の観測どおり (Windows で未作成)。**
+no-go だったのは「Desktop への attach」であって、**spawn した app-server 経由の Tier1 は成立する**。
+この 2 つが混同されていた。

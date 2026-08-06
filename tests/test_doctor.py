@@ -96,3 +96,33 @@ def test_cli_doctor_skip_start_without_codex(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "recommended_tier: 3" in out
     assert "not found" in out
+
+
+# --- 誤判定の再発防止 (PR #6 の no-go 判定はこの 2 点で生まれた) ---
+
+
+def test_doctor_resolves_binary_by_version_not_path_order():
+    """`shutil.which("codex")` の PATH 先頭を信じない。
+
+    PATH 先頭に古い codex (0.130 系) があると app-server が thread/start に
+    永久に応答せず、環境が正常でも「Tier1 不可」と誤判定する (2026-08-06 実測)。
+    """
+    import inspect
+
+    from roundtable import doctor
+
+    src = inspect.getsource(doctor._which_codex)
+    assert "resolve_codex_binary" in src, "版チェック付き解決に委譲していない"
+
+
+def test_doctor_start_timeout_matches_measured_latency():
+    """start プローブの既定が実測レンジ (20.9-58.4s) を下回らない。
+
+    5.0s だと必ず timeout し、no-go の誤結論を生む。
+    """
+    import inspect
+
+    from roundtable.doctor import run_doctor
+
+    default = inspect.signature(run_doctor).parameters["start_timeout"].default
+    assert default >= 120, f"start_timeout={default} は実測レンジに対し小さすぎる"
