@@ -113,9 +113,13 @@ python -m roundtable.cli status <slug> --root <minutes-root>
 | `collect <slug> --invocation <id> [--timeout SEC] [--root R]` | async dispatch 後の回収 |
 | `status <slug> [--root R]` | round / invocation / human_actions / failure_stats |
 | `close <slug> --verdict <裁定> [--root R]` | 未解決一覧 → verdict → closed |
+| `doctor [--skip-start] [--json]` | Codex Tier1 / Desktop socket / 推奨 tier の環境診断 |
 
 KPI (v0.2): 1 議題あたり `human_actions` ≤ 3 (議題宣言 / 指名 / 裁定)。
 Tier3 貼付が必要な席は +1 が journal に `tier3_paste_required` として記録される。
+
+運用前に一度 `doctor` を走らせ、`recommended_tier` を見る。`thread_start: timeout` かつ
+Desktop socket 不在なら **実席は Tier3 貼付が本線** (2026-08-07 実測)。
 
 `--root` はテスト・複数環境切替用。通常運用では省略しデフォルトの minutes root を使う。
 

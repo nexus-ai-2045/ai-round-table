@@ -19,7 +19,7 @@ v0.2 は MPC + FDE 次元圧縮により **主軸 A (手数) + detector 3 個** 
 | L9 | merge_opinion 単体の escape | **hold** (defense-in-depth は v0.3) |
 | S1 | 背景を書く CLI が無い | **done v0.2** (`--background` / `set-background`) |
 | S2 | パイプで exit code が消える | **done v0.2** (`last-result.json` + PROTOCOL 明記) |
-| S3 | Tier3 貼付可否が不明 | **done partial v0.2** (Tier1 試行 + 縮退 + `tier3_paste_required` 記録) |
+| S3 | Tier3 貼付可否が不明 | **done partial v0.2** (縮退 + `tier3_paste_required`)。実席本線=Tier3。`thread/list` のみ go / start·resume·turn no-go (2026-08-07) |
 
 ## v0.2 で置いた detector (修正ではなく検知)
 
