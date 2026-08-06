@@ -49,7 +49,8 @@ def collect(
     data = None
     for attempt in range(3):  # grace retry: 部分書き込み・AV 一時ロックの吸収
         try:
-            data = json.loads(out.read_text(encoding="utf-8"))
+            # utf-8-sig: Windows 席が BOM 付きで書いた場合も受理 (L6 detector 側の耐性)
+            data = json.loads(out.read_text(encoding="utf-8-sig"))
             break
         except (json.JSONDecodeError, UnicodeDecodeError, OSError):
             clock.sleep(0.2)
