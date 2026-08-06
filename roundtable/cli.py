@@ -50,14 +50,16 @@ def _deliver_tier3(seat: dict, text: str, degraded: bool) -> dict:
     except RelayError as e:
         print(f"\n[deliver-failed] クリップボード搬出に失敗: {e}")
         print("上の packet 本文を手でコピーして席に貼り付けてください。")
-        return {"tier": 3, "delivered": False, "human": 0, "relay": None, "degraded": degraded}
+        # 搬出に失敗しても CEO は表示された packet を手でコピペする → 人間の操作は発生する。
+        # ここを 0 にすると KPI が実態より甘くなる (レビュー MED5)。
+        return {"tier": 3, "delivered": False, "human": 1, "relay": None, "degraded": degraded}
     print("\n[clipboard] packet をクリップボードに載せた。席のチャットに貼り付けてください。")
     # Tier3 の貼り付けは人間がやる → 1 回として計上する。Tier1 なら 0 に落ちる
     # (この差分が軸 A の効果測定そのもの)。
     return {"tier": 3, "delivered": True, "human": 1, "relay": None, "degraded": degraded}
 
 
-def _deliver(ledger: Seats, seat: dict, text: str, root: Path) -> dict:
+def _deliver(ledger: Seats, seat: dict, text: str, topic_root: Path) -> dict:
     """seat の tier に従って packet を配達する。Tier1 失敗時は Tier3 へ自動縮退。
 
     戻り値:
@@ -75,12 +77,21 @@ def _deliver(ledger: Seats, seat: dict, text: str, root: Path) -> dict:
 
     relay = None
     try:
-        relay = get_relay(tier, seat["participant"], cwd=root)
+        # cwd は **議題ディレクトリに限定する** (レビュー HIGH1)。root を渡すと
+        # sandbox=workspace-write の書込範囲に全 topic の journal.json / seats.json が
+        # 入り、hash 保護のないこれらを席が直接書き換えられてしまう。
+        relay = get_relay(tier, seat["participant"], cwd=topic_root)
         relay.send(seat, text)
     except (RelayError, NotImplementedError, OSError) as e:
+        thread_ref = getattr(relay, "thread_ref", None) if relay is not None else None
         if relay is not None:
             relay.close()
         print(f"\n[degrade] Tier{tier} relay が失敗したので Tier3 (人間 relay) に縮退する: {e}")
+        if thread_ref:
+            # 送信が届いていた可能性がある。二重投入を避けるため席を先に見てもらう
+            # (レビュー MED4: timeout はサーバー受理の有無を区別できない)。
+            print(f"注意: 席の thread ({thread_ref}) は作成済み。**貼り付ける前にその席を確認**し、")
+            print("      既に応答が始まっていないか見てください (二重投入を避けるため)。")
         print("(Tier2 (UI 自動化) へは昇格しない — 席単位の CEO 明示承認が要る)")
         return _deliver_tier3(seat, text, degraded=True)
 
@@ -120,7 +131,7 @@ def _cmd_dispatch(args) -> int:
             "relay": None, "degraded": False,
         }
     else:
-        delivery = _deliver(ledger, seat, text, root)
+        delivery = _deliver(ledger, seat, text, tp.root)
 
     if delivery["delivered"]:
         journal.set_state(inv, "delivered", _delivery_detail(delivery))

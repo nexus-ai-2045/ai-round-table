@@ -7,11 +7,19 @@
 >
 > **2026-08-06 更新**: Codex Tier1 relay の spike 実測が GO 判定になった (2 run とも
 > handshake〜turn/completed 成立、承認要求・孤児プロセスなし)。`roundtable/relay.py` /
-> `roundtable/relay_codex.py` に実装・単体テスト済み。**ただし `dispatch` コマンドへの
-> 配線 (get_relay 呼び出し) はまだ入っていない** — 現時点の `dispatch` は参加者を問わず
-> Tier3 (クリップボード) 経路のみを通る。以下 §2.3 の Tier1 手順は配線が入った後に
-> 有効になる想定手順として記す。配線状況が不明な時は `roundtable/cli.py` に
-> `get_relay` / `relay_codex` の import があるかを確認すること (現状はない)。
+> `roundtable/relay_codex.py` に実装・単体テスト済みで、**`dispatch` への配線も完了**
+> (`cli._deliver` → `get_relay`、Tier1 失敗時は Tier3 へ自動縮退)。
+>
+> ただし **既定 tier は 3**。Tier1 は `dispatch --tier 1` の明示操作でのみ発動する
+> (fail-safe: 黙って app-server を起こしにいって「届いたつもり」を作らないため)。
+> **実席での往復は 0 回 = 運用未検証**。実装物があることと運用で効いていることを混同しない。
+>
+> 既知の制約 (v0.2 時点):
+> - Tier1 が効くのは **その議題の 1 回目の dispatch のみ**。2 回目以降は席の
+>   `thread_ref` が記録済みのため `thread/resume` が要るが、これは spike 未実測なので
+>   実装せず `NotImplementedError` → Tier3 へ縮退する (推測実装で「届いたつもり」を作らない)。
+> - Tier1 の sandbox は `workspace-write` で、書込範囲は**議題ディレクトリに限定**している。
+>   ただし `journal.json` には `minutes.md` のような hash 保護がない。
 
 ## 0. この手順書の対象
 

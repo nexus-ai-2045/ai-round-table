@@ -112,3 +112,95 @@ def test_invalid_slug_rejected_by_cli(tmp_path):
         main(["new-topic", "../evil", "--topic", "X", "--participants", "codex",
               "--root", str(tmp_path)])
     assert not (tmp_path / "minutes").exists()
+
+
+# --- v0.2 レビュー MED7: Tier1 分岐の CLI レベル統合テスト ---
+
+
+class _FakeRelay:
+    """get_relay を差し替えて Tier1 分岐を配線レベルで検証するための偽 Relay。"""
+
+    def __init__(self, thread_ref="thr_fake", fail=False):
+        self.thread_ref = thread_ref
+        self.fail = fail
+        self.sent = []
+        self.closed = False
+
+    def send(self, seat, text):
+        if self.fail:
+            from roundtable.relay import RelayError
+
+            raise RelayError("fake failure")
+        self.sent.append((seat, text))
+
+    def close(self):
+        self.closed = True
+
+
+def _patch_relay(monkeypatch, relay):
+    """cli が参照している get_relay を差し替える (tier3 は本物を通す)。"""
+    from roundtable import cli as cli_mod
+    from roundtable import relay as relay_mod
+
+    real = relay_mod.get_relay
+
+    def fake_get_relay(tier, participant, **opts):
+        return relay if tier == 1 else real(tier, participant, **opts)
+
+    monkeypatch.setattr(cli_mod, "get_relay", fake_get_relay)
+    return relay
+
+
+def test_tier1_dispatch_uses_relay_and_counts_zero_paste(tmp_path, capsys, monkeypatch):
+    """Tier1 では relay に届き、貼り付け (paste) を計上しない = 軸 A の効果そのもの。"""
+    fake = _patch_relay(monkeypatch, _FakeRelay())
+    main(["new-topic", "t1", "--topic", "X", "--participants", "codex",
+          "--root", str(tmp_path)])
+    main(["dispatch", "t1", "--participant", "codex", "--tier", "1",
+          "--timeout", "0.1", "--root", str(tmp_path)])
+    out = capsys.readouterr().out
+    assert "[tier1]" in out
+    assert len(fake.sent) == 1
+    assert fake.closed is True  # 回収後に必ず撤収する (孤児プロセス防止)
+    tp = ensure_topic(tmp_path, "t1")
+    counts = Journal.load(tp).human_action_counts
+    assert counts == {"topic": 1, "nominate": 1}  # paste は 0
+
+
+def test_tier1_dispatch_scopes_cwd_to_topic_dir(tmp_path, monkeypatch):
+    """sandbox の書込範囲は議題ディレクトリに限定する (レビュー HIGH1)。
+
+    root を渡すと他 topic の journal.json / seats.json (hash 保護なし) が
+    席の書込範囲に入ってしまう。
+    """
+    seen = {}
+    from roundtable import cli as cli_mod
+
+    def fake_get_relay(tier, participant, **opts):
+        seen["cwd"] = opts.get("cwd")
+        return _FakeRelay()
+
+    monkeypatch.setattr(cli_mod, "get_relay", fake_get_relay)
+    main(["new-topic", "t1", "--topic", "X", "--participants", "codex",
+          "--root", str(tmp_path)])
+    main(["dispatch", "t1", "--participant", "codex", "--tier", "1",
+          "--timeout", "0.1", "--root", str(tmp_path)])
+    assert seen["cwd"] == ensure_topic(tmp_path, "t1").root
+    assert seen["cwd"] != tmp_path  # root 全体は渡さない
+
+
+def test_tier1_failure_degrades_to_tier3_and_counts_paste(tmp_path, capsys, monkeypatch):
+    """Tier1 が失敗したら Tier3 に縮退し、そこで発生した貼り付けを計上する。"""
+    from roundtable import packet
+
+    monkeypatch.setattr(packet, "to_clipboard", lambda text: None)
+    _patch_relay(monkeypatch, _FakeRelay(fail=True))
+    main(["new-topic", "t1", "--topic", "X", "--participants", "codex",
+          "--root", str(tmp_path)])
+    main(["dispatch", "t1", "--participant", "codex", "--tier", "1",
+          "--timeout", "0.1", "--root", str(tmp_path)])
+    out = capsys.readouterr().out
+    assert "[degrade]" in out
+    assert "Tier2" in out  # 勝手に昇格しないことを明示している
+    tp = ensure_topic(tmp_path, "t1")
+    assert Journal.load(tp).human_action_counts["paste"] == 1

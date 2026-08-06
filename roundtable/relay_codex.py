@@ -413,8 +413,28 @@ class CodexAppServer:
             return "".join(self._agent_deltas)
 
 
+def _kill_process_tree(pid: int) -> None:
+    """子孫ごと終了させる (Windows: taskkill /T)。
+
+    app-server はサンドボックス内でコマンドを実行しうるため、親だけ kill すると
+    孫プロセスが孤児として残る。spike の「孤児なし」実測は素朴な 1 往復のみで、
+    コマンド実行中の強制 close は検証していない (レビュー HIGH2)。
+    taskkill が無い環境 (非 Windows) では黙って諦める — 呼び出し元が
+    proc.kill() を続けて行うので、最低限親は落ちる。
+    """
+    if os.name != "nt":
+        return
+    try:
+        subprocess.run(
+            ["taskkill", "/T", "/F", "/PID", str(pid)],
+            check=False, shell=False, capture_output=True, timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
 def _terminate_process(proc: subprocess.Popen) -> int | None:
-    """stdin close → terminate → wait(10s) → kill。孤児を残さない (spike 実測)。"""
+    """stdin close → terminate → wait(10s) → プロセスツリー kill。孤児を残さない。"""
     try:
         if proc.stdin:
             proc.stdin.close()
@@ -428,6 +448,7 @@ def _terminate_process(proc: subprocess.Popen) -> int | None:
     try:
         return proc.wait(timeout=10)
     except subprocess.TimeoutExpired:
+        _kill_process_tree(proc.pid)  # 子孫ごと (親だけ kill すると孫が残る)
         proc.kill()
         return proc.wait(timeout=10)
 
