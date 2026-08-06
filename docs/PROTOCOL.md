@@ -2,7 +2,16 @@
 
 > SSOT: 本ファイル。`adapters/*/SKILL.md` はここへの薄い参照のみを持ち、内容を重複させない。
 > 前提設計: `docs/DESIGN.md` (v6) §0, §3-§6, §10。実装インターフェースは
-> `docs/plans/2026-07-27-v0.1-implementation.md` Task 6-8。
+> `docs/plans/2026-07-27-v0.1-implementation.md` Task 6-8、v0.2 は
+> `docs/plans/2026-08-05-v0.2-mpc-plan.md`。
+>
+> **2026-08-06 更新**: Codex Tier1 relay の spike 実測が GO 判定になった (2 run とも
+> handshake〜turn/completed 成立、承認要求・孤児プロセスなし)。`roundtable/relay.py` /
+> `roundtable/relay_codex.py` に実装・単体テスト済み。**ただし `dispatch` コマンドへの
+> 配線 (get_relay 呼び出し) はまだ入っていない** — 現時点の `dispatch` は参加者を問わず
+> Tier3 (クリップボード) 経路のみを通る。以下 §2.3 の Tier1 手順は配線が入った後に
+> 有効になる想定手順として記す。配線状況が不明な時は `roundtable/cli.py` に
+> `get_relay` / `relay_codex` の import があるかを確認すること (現状はない)。
 
 ## 0. この手順書の対象
 
@@ -24,6 +33,13 @@ dispatcher (`roundtable` パッケージ) は AI を一切実行しない。参�
   (DESIGN v6 §0 の CEO 確定要件)。席は必ずアプリの実チャット。
 - **裁定・打ち切り・ラウンド続行の判断は常に CEO。** ホストが「もう十分」「これで決まり」等を判断しない。
 - **失敗を隠さない。** timeout / schema 違反 / id 不一致 / hash 改ざん検知は、起きたら必ずそのまま提示する。
+- **`dispatch` をパイプに通さない。** `python -m roundtable.cli dispatch ... | tail -N` のように
+  パイプへ通すと、シェルが返す exit code はパイプ末尾のコマンド (`tail` 等) のものに
+  置き換わり、**dispatch 自体が timeout などで失敗していても成功 (exit 0) に見える**
+  (2026-08-05 実席 smoke で実測、review-backlog.md S2)。`dispatch` の標準出力はもともと
+  短い (collect 結果 1 ブロック程度) ので単独実行し、出力全文をそのまま読むこと。
+  ログを残す必要があるならパイプでなくリダイレクト (`> file.txt`) を使う (exit code に
+  影響しない)。
 
 ## 2. 手順
 
@@ -47,7 +63,37 @@ python -m roundtable.cli dispatch <slug> --participant <ai> [--role-hint "<視�
 
 dispatch は内部で snapshot 更新・invocation 発行・packet 生成・collect (回収待ち) までを一括で行う。
 
-### 2.3 Tier3 (人間 relay) の場合
+### 2.3 Tier1 / Tier3 の配達経路
+
+Tier は席ごとに決まる (DESIGN v6 §7 seats.json)。2026-08-06 時点で **spike 実測・実装が
+済んでいるのは codex 席の Tier1 のみ**。CC はホスト自身なので relay 不要 (参加者としては
+CCD セッション間 `send_message` を使う想定・別経路)。他席は v0.2 でも Tier3 のみ。
+
+#### Tier1 (codex 席、`dispatch` への配線後)
+
+Codex の Tier1 は「ホストが tool call で他アプリへ送る」方式ではない。`dispatch`
+プロセス自身が `codex app-server --stdio` を spawn し、JSON-RPC で
+`initialize`→`thread/start`→`thread/name/set`→`turn/start` を直接呼んで packet を
+届ける (`roundtable/relay_codex.py` の `CodexRelay`)。ホストは通常どおり `dispatch` を
+実行するだけでよく、クリップボード案内も CEO への「貼ってください」の一言も不要になる。
+席のチャット履歴は Codex アプリ側に残る (DESIGN v6 §0 要件)。`send()` は `turn/start` が
+受理された時点で返り、完了 (`turn/completed`) は待たない — 回収は従来どおり watcher の
+scratch ファイル polling が行う (spike 実測: 成果物は turn 完了前に書かれる)。
+
+#### Tier1 → Tier3 縮退
+
+Tier1 配達が失敗した (`RelayError`: spawn 失敗・handshake timeout・thread/turn 開始失敗
+など) 場合、**ホストは黙って Tier2 (UI 自動化) へ昇格しない** (DESIGN v6 §4)。CEO へは
+次の形で伝える:
+
+> Tier1 (codex) への配達に失敗したため Tier3 (クリップボード) に切り替えました。
+> 理由: `<RelayError のメッセージをそのまま>`
+> クリップボードに packet を入れました。`<席チャット名>` に貼ってください。
+
+エラーメッセージは加工・要約しない (§1 禁止事項と同じ扱い)。自動再試行はしない —
+縮退後に続けるかどうかは CEO 判断を待つ。
+
+#### Tier3 (人間 relay、現状の既定経路)
 
 `dispatch` が packet をクリップボードへ搬出したら、CEO へは次の 1 行だけ伝える:
 
@@ -55,9 +101,6 @@ dispatch は内部で snapshot 更新・invocation 発行・packet 生成・coll
 
 席チャット名以上の説明は不要。CEO が貼り付けたら、collect は同じ `dispatch` 呼び出し内で
 出力ファイル出現を待って自動的に検証・merge まで進む。
-
-Tier1 (spike 通過席) の場合は、dispatch がホストの tool call (例: CCD `send_message`) 経由で
-packet を届ける。人間への「貼ってください」案内は不要。
 
 ### 2.4 collect 結果の提示
 
@@ -123,3 +166,26 @@ python -m roundtable.cli status <slug> --root <minutes-root>
 - 席 (アプリの実チャット) は CEO が事前に作成する。ホストは新しい席を勝手に作らない。
 - `minutes/<slug>/` 配下 (minutes.md / journal.json / scratch / snapshot) 以外にホストが
   書き込みを行うことはない。
+
+## 6. 人間の操作カウント (軸 A, v0.2)
+
+`status` / `close` の出力に出る「人間の操作: N 回」は、`journal.human_actions` が
+`roundtable/journal.py` の `record_human_action` で機械的に数えた回数であり、
+自己申告や見積もりではない。数える種別:
+
+| 種別 | いつ計上されるか |
+|---|---|
+| `topic` | `new-topic` 実行 (議題宣言) |
+| `nominate` | `dispatch` 実行 (指名) |
+| `paste` | Tier3 でクリップボード搬出した時 (CEO の貼り付け 1 回に対応。Tier1 化した席では発生しない) |
+| `verdict` | `close` 実行 (裁定) |
+| `command` | 上記に当てはまらない手動操作 (現状未使用。将来の拡張枠) |
+
+`status` を実行すること自体はカウントしない (観測操作が KPI を汚さないようにするため)。
+
+v0.2 の受け入れ基準は **1 議題あたり人間の操作 ≤ 3** (`docs/plans/2026-08-05-v0.2-mpc-plan.md`
+§5 — 議題宣言・指名・裁定の 3 回のみで完結する状態が目標値)。Tier3 席が混ざると
+`paste` の分だけ超過するのが正常であり、これは「Tier1 化でどれだけ手数が減るか」を
+測る差分そのものでもある。ホストは `status` / `close` の結果を CEO に見せる時、
+この内訳もそのまま提示してよい (機械カウントの提示であり、意見の要約・評価には
+当たらないため §1 禁止事項に抵触しない)。
