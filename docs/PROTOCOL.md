@@ -32,20 +32,28 @@ dispatcher (`roundtable` パッケージ) は AI を一切実行しない。参�
 CEO から議題と参加者が指定されたら:
 
 ```
-python -m roundtable.cli new-topic <slug> --topic "<議題文>" --participants <ai1>,<ai2> --root <minutes-root>
+python -m roundtable.cli new-topic <slug> --topic "<議題文>" --participants <ai1>,<ai2> [--background "<背景>"] --root <minutes-root>
 ```
 
-minutes.md が `minutes/<slug>/minutes.md` に生成される。
+minutes.md が `minutes/<slug>/minutes.md` に生成される。背景は `--background` で同時に書ける
+(後から `set-background` でも可)。
 
 ### 2.2 CEO のバッチ指名を受けて dispatch
 
 CEO が「この周は codex→cc」のように指名したら、指名順に 1 参加者ずつ dispatch する:
 
 ```
-python -m roundtable.cli dispatch <slug> --participant <ai> [--role-hint "<視点>"] --root <minutes-root>
+python -m roundtable.cli dispatch <slug> --participant <ai> [--role-hint "<視点>"] [--tier 1|3] [--async] --root <minutes-root>
 ```
 
-dispatch は内部で snapshot 更新・invocation 発行・packet 生成・collect (回収待ち) までを一括で行う。
+dispatch は内部で snapshot 更新・invocation 発行・packet 生成・relay・(既定) collect まで一括。
+`--async` のときは搬出だけ行い、回収は `collect --invocation <id>` で行う。
+`--tier 1` は Codex 席で app-server 経由の送付を試み、失敗時は **自動で Tier3 に縮退**する
+(Tier2 へは昇格しない)。
+
+**パイプ注意 (S2)**: `dispatch | tail` のようにパイプすると shell の exit code が
+末尾コマンドのものになり、timeout 失敗が成功に見える。結果の機械確認は常に
+`minutes/<slug>/last-result.json` と `status` を使う。
 
 ### 2.3 Tier3 (人間 relay) の場合
 
@@ -99,10 +107,15 @@ python -m roundtable.cli status <slug> --root <minutes-root>
 
 | コマンド | 用途 |
 |---|---|
-| `new-topic <slug> --topic <題> --participants a,b [--root R]` | 議題開始・minutes.md 生成 |
-| `dispatch <slug> --participant <ai> [--role-hint H] [--no-clipboard] [--timeout SEC] [--root R]` | snapshot 更新 → packet 生成 → relay → collect まで一括 |
-| `status <slug> [--root R]` | round / 各 invocation 状態を表示 |
-| `close <slug> --verdict <裁定> [--root R]` | 失敗一覧表示 → verdict 記入 → status: closed |
+| `new-topic <slug> --topic <題> --participants a,b [--background B] [--root R]` | 議題開始・minutes.md 生成 |
+| `set-background <slug> --text <文> [--root R]` | ## 背景 を更新 (S1) |
+| `dispatch <slug> --participant <ai> [--role-hint H] [--tier 1\|3] [--async] [--no-clipboard] [--timeout SEC] [--root R]` | snapshot → packet → relay → (既定) collect |
+| `collect <slug> --invocation <id> [--timeout SEC] [--root R]` | async dispatch 後の回収 |
+| `status <slug> [--root R]` | round / invocation / human_actions / failure_stats |
+| `close <slug> --verdict <裁定> [--root R]` | 未解決一覧 → verdict → closed |
+
+KPI (v0.2): 1 議題あたり `human_actions` ≤ 3 (議題宣言 / 指名 / 裁定)。
+Tier3 貼付が必要な席は +1 が journal に `tier3_paste_required` として記録される。
 
 `--root` はテスト・複数環境切替用。通常運用では省略しデフォルトの minutes root を使う。
 

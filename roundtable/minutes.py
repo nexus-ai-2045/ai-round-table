@@ -54,8 +54,28 @@ def atomic_write(path: Path, text: str) -> None:
         raise
 
 
-def create(tp: TopicPaths, topic: str, participants: list[str]) -> None:
-    atomic_write(tp.minutes, TEMPLATE.format(topic=topic, participants=", ".join(participants)))
+def create(tp: TopicPaths, topic: str, participants: list[str], background: str = "") -> None:
+    body = TEMPLATE.format(topic=topic, participants=", ".join(participants))
+    if background:
+        body = body.rstrip() + "\n" + background.rstrip() + "\n"
+    atomic_write(tp.minutes, body)
+
+
+def set_background(tp: TopicPaths, background: str) -> None:
+    """## 背景 セクション直後に本文を書く (S1: python 直書きを不要にする)。"""
+    text = tp.minutes.read_text(encoding="utf-8")
+    marker = "## 背景\n"
+    if marker not in text:
+        raise ValueError("minutes に ## 背景 見出しが無い")
+    # 次の ## 見出しまでを差し替える (無ければ末尾)
+    head, rest = text.split(marker, 1)
+    next_h = re.search(r"^## ", rest, re.MULTILINE)
+    if next_h:
+        rest_after = rest[next_h.start() :]
+        new_text = head + marker + "\n" + background.rstrip() + "\n\n" + rest_after
+    else:
+        new_text = head + marker + "\n" + background.rstrip() + "\n"
+    atomic_write(tp.minutes, new_text)
 
 
 def sha256(path: Path) -> str:
