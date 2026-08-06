@@ -8,6 +8,7 @@ CEO 禁止は「CLI で AI を実行する」こと。ここは既存/起動し�
 from __future__ import annotations
 
 import json
+import os
 import queue
 import subprocess
 import threading
@@ -15,6 +16,19 @@ import time
 from typing import Any
 
 from .relay import RelayError
+
+
+def _kill_process_tree(pid: int) -> None:
+    """子孫ごと終了させる (Windows: taskkill /T)。無い環境では親だけ kill に任せる。"""
+    if os.name != "nt":
+        return
+    try:
+        subprocess.run(
+            ["taskkill", "/T", "/F", "/PID", str(pid)],
+            check=False, shell=False, capture_output=True, timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        pass
 
 
 class CodexAppServerRelay:
@@ -42,7 +56,10 @@ class CodexAppServerRelay:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                encoding="utf-8",   # 未指定だと Windows は cp932 になり日本語 packet が壊れる
+                errors="replace",
                 bufsize=1,
+                cwd=self.cwd,       # spawn 時の作業ディレクトリも席のスコープに寄せる
             )
         except OSError as exc:
             raise RelayError(f"spawn app-server failed: {exc}") from exc
@@ -105,8 +122,15 @@ class CodexAppServerRelay:
                 params: dict[str, Any] = {}
                 if self.cwd:
                     params["cwd"] = self.cwd
-                # ephemeral: 一時席。デスクトップ一覧汚染を抑える。
-                params["ephemeral"] = True
+                # sandbox / approvalPolicy は **必ず明示する**。省略するとサーバ既定に
+                # 従い、実測では danger-full-access になりうる (= 席が repo 全体を書ける)。
+                # 席の仕事は scratch に JSON を 1 本書くことだけなので workspace-write に
+                # 絞り、cwd を議題ディレクトリにして書込範囲をそこへ閉じる。
+                params["sandbox"] = "workspace-write"
+                # 承認要求で無言停止しないため never。実効的な境界は上の sandbox。
+                params["approvalPolicy"] = "never"
+                # ephemeral は使わない: 一時席にすると会話がアプリ側に残らず、
+                # 「CEO が席のチャットを直接読める」要件 (DESIGN v6 §0) を壊す。
                 # 応答なし環境でも長待ちしない。失敗は FallbackRelay が Tier3 へ。
                 result = self._rpc("thread/start", params, timeout=5)
                 thread = result.get("thread") or {}
@@ -145,9 +169,33 @@ class CodexAppServerRelay:
         return None
 
     def close(self) -> None:
-        if self._proc and self._proc.poll() is None:
-            try:
-                self._proc.kill()
-            except OSError:
-                pass
+        """stdin close -> terminate -> wait -> プロセスツリー kill。
+
+        app-server は sandbox 内でコマンドを実行しうるので、親だけ kill すると
+        孫が孤児として残る。spike の「孤児なし」実測は素朴な 1 往復のみで、
+        コマンド実行中の強制 close は検証していない。
+        """
+        proc = self._proc
         self._proc = None
+        if proc is None or proc.poll() is not None:
+            return
+        try:
+            if proc.stdin:
+                proc.stdin.close()
+        except (OSError, ValueError):
+            pass
+        try:
+            proc.terminate()
+        except OSError:
+            pass
+        try:
+            proc.wait(timeout=5)
+            return
+        except subprocess.TimeoutExpired:
+            pass
+        _kill_process_tree(proc.pid)
+        try:
+            proc.kill()
+            proc.wait(timeout=5)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
