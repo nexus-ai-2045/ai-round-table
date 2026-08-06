@@ -19,7 +19,7 @@ v0.2 は MPC + FDE 次元圧縮により **主軸 A (手数) + detector 3 個** 
 | L9 | merge_opinion 単体の escape | **hold** (defense-in-depth は v0.3) |
 | S1 | 背景を書く CLI が無い | **done v0.2** (`--background` / `set-background`) |
 | S2 | パイプで exit code が消える | **done v0.2** (`last-result.json` + PROTOCOL 明記) |
-| S3 | Tier3 貼付可否が不明 | **done partial v0.2** (Tier1 試行 + 縮退 + `tier3_paste_required` 記録) |
+| S3 | Tier3 貼付可否が不明 | **done partial v0.2** (縮退 + `tier3_paste_required`)。実席本線=Tier3。`thread/list` のみ go / start·resume·turn no-go (2026-08-07) |
 
 ## v0.2 で置いた detector (修正ではなく検知)
 
@@ -31,3 +31,59 @@ v0.2 は MPC + FDE 次元圧縮により **主軸 A (手数) + detector 3 個** 
 | D 境界 | slug 検証 | `paths.ensure_topic` |
 
 原本: workflow 出力 (scratch には保存せず、本台帳を正とする)
+
+## v0.2 Tier1 ハードニング (2026-08-06)
+
+PR #3 (別セッション実装) が main に入った後、そちらの Tier1 経路を敵対レビュー観点で
+検査して見つかった穴。**設計フォーク (PR #4) は superseded として閉じ、main を土台に
+安全性だけ移植した**。
+
+| # | severity | 内容 | 対応 |
+|---|---|---|---|
+| T1 | HIGH | `subprocess.Popen(text=True)` に encoding 指定がなく、Windows では cp932。**日本語 packet が壊れる** | `encoding="utf-8"` / `errors="replace"` を明示 |
+| T2 | HIGH | `thread/start` に sandbox / approvalPolicy が無く**サーバ既定依存**。実測で Codex の既定は `danger-full-access` になりうる | `sandbox="workspace-write"` + `approvalPolicy="never"` を明示 |
+| T3 | HIGH | `cwd` が未配線で app-server が CLI の実行ディレクトリを継承。書込範囲が不定 | `cli` → `get_relay(cwd=str(tp.root))` → spawn/thread の両方へ。**議題ディレクトリに限定** |
+| T4 | HIGH | `close()` が `proc.kill()` のみ。孫プロセスが孤児化 | stdin close → terminate → wait → `taskkill /T /F` |
+| T5 | MED | `ephemeral=True` にしていた | 削除。一時席にすると会話がアプリに残らず「席を CEO が読める」要件 (DESIGN v6 §0) を壊す |
+
+検証: `tests/test_v02_tier1_hardening.py` (6 本)。実 CLI を起動せず、
+危険な既定に戻ったら落ちる形にしてある。全 suite 49 passed。
+
+**未対応で残す穴 (v0.3)**: `journal.json` / `seats.json` に `minutes.md` 相当の hash 保護がない。
+Tier1 の書込範囲を議題配下に絞ったので露出は減ったが、同一議題内では席が journal.json を書ける。
+
+## PR #4 のテスト資産を main へ移植 (2026-08-06)
+
+設計フォークで PR #4 を閉じた際、そこにあった**守備範囲まで一緒に失われていた**ことに
+気づいたため、`tests/test_v02_invariants.py` として main の API に合わせて持ち込んだ。
+実装の内部構造ではなく**守るべき性質**でまとめてある (API が変わっても生き残る形)。
+
+移植前後の守備範囲:
+
+| 対象 | main (移植前) | 移植後 |
+|---|---|---|
+| 状態遷移の逆行・終端 | 部分的 | 6 本 (merged/failed 終端・逆行拒否・非永続化・失敗分岐) |
+| slug パストラバーサル | 1 本 | 24 本 (`..` `/abs` `C:/abs` `\server\share` `nul\x00` 等) |
+| KPI 計測の性質 | なし | 2 本 (再ロード永続・status が観測専用) |
+| 失敗集計 | 部分的 | 2 本 (schema 畳み込み・空 detail を落とさない) |
+| 議事録防御 | 11 本 | +4 本 (改ざん fail-closed・見出し注入全経路・Round 抑止攻撃) |
+
+**この移植で main の実バグを 1 件検出した**: `topic_dir()` が slug を検証しておらず、
+`ensure_topic()` 経由でしか軸 D が効いていなかった。`topic_dir` を直接使う経路
+(将来の CLI・ツール) は root 外を指せる状態だった → 合成と検証を同じ場所に置くよう修正。
+
+全 suite 49 → **113 passed**。
+
+## Codex bot レビュー (PR #5, 2026-08-06) — 対応
+
+| # | 判定 | 内容 | 対応 |
+|---|---|---|---|
+| P1-a | **却下 (指摘が誤り)** | 「sandbox は camelCase `workspaceWrite` を送れ」 | スキーマで確定: `thread/start.sandbox` の型は **`SandboxMode` = `["read-only", "workspace-write", "danger-full-access"]`** で **hyphen が正**。camelCase は `turn/start.sandboxPolicy` (型 `SandboxPolicy` のオブジェクト `{"type": "workspaceWrite"}`) の話で、bot が README の turn 例を thread と混同している。変更しない |
+| P1-b | 採用 | 非 Windows で子孫が回収されない | `_ProcessTree` を新設。POSIX は `start_new_session=True` + `killpg` |
+| P1-c | 採用 | Windows で terminate 成功時に木の掃除を飛ばす | **Job Object + `KILL_ON_JOB_CLOSE`** に変更。ハンドルを閉じた時点で木ごと終わるので、terminate が成功した経路でも取りこぼさない |
+| P2 | 採用 | 相対 `--root` だと cwd が二重解決される | `str(tp.root.resolve())` を渡す |
+
+検証: `tests/test_v02_tier1_hardening.py` に 3 本追加 (POSIX グループ分離 / terminate 成功時の木回収 / 相対 root の絶対化)。全 suite **115 passed**。
+
+一次情報: `codex app-server generate-json-schema` の `ClientRequest.json` →
+`definitions.SandboxMode` / `definitions.SandboxPolicy` / `definitions.AskForApproval`。

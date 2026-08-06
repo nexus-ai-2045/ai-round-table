@@ -71,7 +71,10 @@ def _cmd_dispatch(args) -> int:
         })
         seat["topic"] = args.slug
         seat["thread_name"] = f"rt-{args.slug}-{args.participant}"
-        relay = get_relay(args.participant, tier=tier, allow_fallback=True)
+        # cwd は議題ディレクトリに限定する: Tier1 の sandbox 書込範囲がここになる。
+        relay = get_relay(
+            args.participant, tier=tier, allow_fallback=True, cwd=str(tp.root.resolve())  # 相対 --root だと spawn 先で二重解決になる (P2)
+        )
         try:
             relay_label = relay.send(seat, text)
         except Exception as exc:  # Tier3 失敗など

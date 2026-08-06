@@ -34,7 +34,12 @@ class TopicPaths:
 
 
 def topic_dir(root: Path, slug: str) -> Path:
-    return root / "minutes" / slug
+    """topic ディレクトリを返す。**ここが唯一の path 合成点なので検証もここで行う**。
+
+    ensure_topic 側だけで検証すると、topic_dir を直接使う経路 (将来の CLI・
+    ツール) が検証を素通りして root 外を指せる。合成と検証を同じ場所に置く。
+    """
+    return root / "minutes" / validate_slug(slug)
 
 
 def validate_slug(slug: str) -> str:

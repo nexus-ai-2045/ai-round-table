@@ -69,8 +69,18 @@ class FallbackRelay:
         return self._active.poll(seat)
 
 
-def get_relay(participant: str, tier: int = 3, allow_fallback: bool = True) -> Relay:
-    """席に応じた relay を返す。未知参加者・Tier1 未対応は Tier3。"""
+def get_relay(
+    participant: str,
+    tier: int = 3,
+    allow_fallback: bool = True,
+    cwd: str | None = None,
+) -> Relay:
+    """席に応じた relay を返す。未知参加者・Tier1 未対応は Tier3。
+
+    cwd は Tier1 の sandbox 書込範囲になる。**議題ディレクトリを渡すこと** —
+    root を渡すと他議題の journal.json / seats.json (hash 保護なし) まで
+    席の書込範囲に入る。
+    """
     from .relay_tier3 import Tier3Relay
 
     if tier == 3:
@@ -81,7 +91,7 @@ def get_relay(participant: str, tier: int = 3, allow_fallback: bool = True) -> R
     if tier == 1 and participant == "codex":
         from .relay_codex import CodexAppServerRelay
 
-        preferred = CodexAppServerRelay()
+        preferred = CodexAppServerRelay(cwd=cwd)
         if allow_fallback:
             return FallbackRelay(preferred, Tier3Relay())
         return preferred

@@ -1,8 +1,8 @@
 # v0.2 Phase 0 spike 結果 — Codex app-server Tier1
 
-- 日付: 2026-08-06
+- 日付: 2026-08-06 / 追記 2026-08-07
 - 環境: Windows / `codex` 0.130.0-alpha.5 (`C:\Users\yas\AppData\Local\OpenAI\Codex\bin\codex.exe`)
-- 目的: DESIGN v6 §8 spike 1 / v0.2 plan Phase 0 go/no-go
+- 目的: DESIGN v6 §8 spike 1 / v0.2 plan Phase 0 go/no-go / **実席経路の切り分け**
 
 ## 実測
 
@@ -11,18 +11,56 @@
 | `codex app-server` spawn (stdio) | **OK** | プロセス生存、stdout JSONL |
 | `initialize` + `clientInfo` | **OK** | `result.userAgent` / `codexHome` / `platformOs=windows` 返却 |
 | `initialized` 通知 | **OK** | エラーなし |
-| `thread/start` (`ephemeral: true` 含む) | **no response (2026-08-06 実測)** | `initialize` 成功後も id 付き応答が 20s 内に来ない。実装は 5s timeout → Tier3 縮退 |
-| デスクトップアプリで thread 可視 | **未確認** (CEO 目視が必要) | 自動では判定不能 |
-| 席が scratch に JSON 書込 | **未確認** | turn 成功後の観察項目 |
+| `thread/list` | **OK (2026-08-07)** | 既存 thread 25 件を返却。`status: notLoaded` 含む |
+| `thread/start` (empty / cwd+sandbox / ephemeral) | **no response** | id 付き応答が timeout 内に来ない |
+| `thread/resume` (list で得た id) | **no response (2026-08-07)** | 同上 |
+| `turn/start` (resume 後) | **no response (2026-08-07)** | 同上 |
+| デスクトップアプリで thread 可視 | **未確認** (CEO 目視) | list は会話ストアを読めるが、自前 spawn サーバからの書込は未成立 |
+| 席が scratch に JSON 書込 | **Tier3 経路のみ運用可** | Tier1 turn が届かないため |
 | Tier1 障害時の縮退 | **実装済み** | `FallbackRelay` → Tier3。Tier2 へは昇格しない |
 
-## go / no-go 判定
+## go / no-go 判定 (FDE 圧縮後)
 
-- **部分 go**: app-server の spawn + initialize は再現可能。これを「Tier1 経路の土台がある」とみなし、`relay_codex.py` を本線に載せる。
-- **運用上の安全網**: `thread/start` / `turn/start` が失敗したら **必ず Tier3 に縮退**する。KPI (人間操作 ≤ 3) は Tier1 成功席でのみ達成見込み。
-- **no-go ではない**: 全面 Tier3 固定には戻さない。縮退があるため本番 path を壊さない。
+| 軸 | 判定 | 制御 |
+|---|---|---|
+| 会話ストア**読取** | go | `thread/list` で既存席の存在確認はできる |
+| 会話ストア**書込** (自前 spawn) | **no-go (現状)** | start/resume/turn が無応答。これ以上パラメータ総当りは次元の呪い |
+| 実席運用 | **Tier3 が本線** | クリップボード → CEO 貼付 → scratch JSON → collect |
+| Tier1 コード | **残す (縮退前提)** | 将来 desktop 接続やプロトコル差分が解けたらそのまま使える。失敗しても path を壊さない |
 
-## 再計画メモ (MPC)
+**やらないこと (MPC)**: `thread/start` の全パラメータ探索 / 別プロトコルの再発明 / UI 自動化 (Tier2)。
+次の 1 手は「自前 spawn ではなく **デスクトップ側 app-server に接続**できるか」だけを v0.3 で観測する。
 
-- 次の観測点: 実議題 1 本で `--tier 1` を試し、fallback が何回発火するかを `seats.json` / journal detail で数える。
-- fallback 率が支配的なら v0.3 で thread/start パラメータ (cwd / sandbox / permissions) を実測で詰める。backlog 全消化はしない。
+## 実席の定義 (用語)
+
+- **実席** = Codex / Claude など**アプリの実チャット**に packet が入り、席が scratch に契約 JSON を書くこと
+- **実績** ≠ 実席。CLI の mock smoke 成功は実績だが実席ではない
+- 2026-08-07 時点の機械保証: mock + Tier3 縮退 + (任意) 人間貼付
+
+## 再計画メモ
+
+| 予測 | 実際 (2026-08-07) | 学び |
+|---|---|---|
+| 手数で死ぬ | Tier3 貼付が残る | KPI は core 3 + paste +1 |
+| thread/start パラメータ不足 | list は成功、start/resume/turn 全滅 | パラメータより **接続先 (spawn vs desktop)** が支配項 |
+| fallback が支配的 | 実測どおり常時 fallback | v0.2 運用は Tier3 前提でよい |
+
+## 運用コマンド (実席 = Tier3)
+
+```powershell
+# 1) 議題
+python -m roundtable.cli new-topic <slug> --topic "..." --participants codex --background "..." --root <root>
+
+# 2) 搬出 (Tier1 試行 → 失敗時クリップボード)
+python -m roundtable.cli dispatch <slug> --participant codex --tier 1 --async --root <root>
+
+# 3) CEO: Codex アプリの席チャットに貼付。席は scratch/<inv>.json を書く
+
+# 4) 回収
+python -m roundtable.cli collect <slug> --invocation <inv> --root <root>
+
+# 5) 裁定
+python -m roundtable.cli close <slug> --verdict "..." --root <root>
+```
+
+再現スクリプト: `scripts/ops-real-seat-tier3.ps1` (貼付待ちまで自動化、席 JSON は人間/席が書く)。
