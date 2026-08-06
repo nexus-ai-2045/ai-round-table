@@ -87,3 +87,26 @@ Tier1 の書込範囲を議題配下に絞ったので露出は減ったが、�
 
 一次情報: `codex app-server generate-json-schema` の `ClientRequest.json` →
 `definitions.SandboxMode` / `definitions.SandboxPolicy` / `definitions.AskForApproval`。
+
+## 実往復スモークで判明した致命的ブロッカー (2026-08-06)
+
+**Tier1 は実環境で 100% 失敗していた。** 実議題 `2026-08-06-tier1-live` を `--tier 1` で
+dispatch したところ `thread/start: timeout after 5s` で Tier3 に縮退した。
+
+素の app-server を計測した結果:
+
+| 段階 | 実測 | 修正前の既定 | 判定 |
+|---|---|---|---|
+| `initialize` | **6.66s** | 8s | ギリギリ (環境次第で落ちる) |
+| `thread/start` | **20.9s** | **5s** | **必ず失敗** |
+
+→ `TIMEOUT_INITIALIZE=60` / `TIMEOUT_THREAD_START=120` / `TIMEOUT_TURN_START=120` に修正し、
+実測値を根拠としてコードに残した。回帰防止テスト
+`test_timeouts_have_margin_over_measured_latency` で数値を不変条件として固定。
+
+**学び**: fake stdio のユニットテストは即答するので、この種の穴を構造的に検出できない。
+「実装済み・単体テスト green」と「運用で効いている」は別物であることの実例。
+実往復スモークを受け入れ基準に入れていた判断が正しかった。
+
+**副産物**: 実サーバが `sandbox: "workspace-write"` (hyphen) を受理した。Codex bot の
+camelCase 指摘 (PR #5 P1-a) が誤りであることが、schema に加えて**実測でも裏付けられた**。

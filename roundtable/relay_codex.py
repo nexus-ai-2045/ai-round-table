@@ -19,6 +19,17 @@ from typing import Any
 from .relay import RelayError
 
 
+# 実測 (2026-08-06, Windows / codex-cli 0.144.6):
+#   initialize   6.66s
+#   thread/start 20.9s
+# main の既定 (initialize=8s / thread/start=5s) では thread/start が必ず timeout し、
+# Tier1 は毎回 Tier3 へ縮退していた (実往復スモークで確認)。実測の 5-10 倍を取る。
+TIMEOUT_INITIALIZE = 60.0
+TIMEOUT_THREAD_START = 120.0
+TIMEOUT_THREAD_NAME = 30.0
+TIMEOUT_TURN_START = 120.0
+
+
 class _ProcessTree:
     """spawn した app-server とその子孫をまとめて回収するための箱。
 
@@ -168,7 +179,7 @@ class CodexAppServerRelay:
                 },
                 "capabilities": {},
             },
-            timeout=8,
+            timeout=TIMEOUT_INITIALIZE,
         )
         self._notify("initialized", {})
 
@@ -224,8 +235,7 @@ class CodexAppServerRelay:
                 params["approvalPolicy"] = "never"
                 # ephemeral は使わない: 一時席にすると会話がアプリ側に残らず、
                 # 「CEO が席のチャットを直接読める」要件 (DESIGN v6 §0) を壊す。
-                # 応答なし環境でも長待ちしない。失敗は FallbackRelay が Tier3 へ。
-                result = self._rpc("thread/start", params, timeout=5)
+                result = self._rpc("thread/start", params, timeout=TIMEOUT_THREAD_START)
                 thread = result.get("thread") or {}
                 thread_id = thread.get("id")
                 if not thread_id:
@@ -236,7 +246,7 @@ class CodexAppServerRelay:
                     self._rpc(
                         "thread/name/set",
                         {"threadId": thread_id, "name": name},
-                        timeout=5,
+                        timeout=TIMEOUT_THREAD_NAME,
                     )
                 except RelayError:
                     # 名前付け失敗は致命ではない
@@ -247,7 +257,7 @@ class CodexAppServerRelay:
                     "threadId": thread_id,
                     "input": [{"type": "text", "text": text}],
                 },
-                timeout=20,
+                timeout=TIMEOUT_TURN_START,
             )
             return "tier1-sent"
         except RelayError:
