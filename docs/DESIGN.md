@@ -39,6 +39,7 @@ Codex / CC / Grok / Gemini を Windows 上でリンクし、人間 (CEO) が司�
 | D8 | Evidence 型付け (observed/log/diff/source/argument/none)。自己申告であり検証済み表示にしない | Codex1st#8 |
 | D9 | round 上限 3。収束の自動判定はしない | CC#1 + ai-council-framework の独立採用例 |
 | D10 | v0.1 に要約層・コスト警告を入れない (raw 提示)。v0.2 で non-authoritative + 原文参照付きで導入 | Codex1st#7/#9 |
+| D11 | **CC (ホストランタイム) は席にしない**。参加者は異ベンダーの AI で埋める | 独立性 > 頭数 (下記 D11 節) |
 
 ## 3. アーキテクチャ
 
@@ -72,9 +73,28 @@ CEO（判断のみ: 議題・指名・裁定・打ち切り・割り込み）
 | 席 | 経路 | 状態 | 出典 |
 |---|---|---|---|
 | Codex | **自前 spawn の `codex app-server` + stdio JSONL** (JSON-RPC 2.0)。`thread/start·resume·read·list·name` / `turn/start·steer·interrupt`。VS Code 拡張・デスクトップアプリと同一プロトコル (stable 扱い)。**daemon 常駐管理は Unix 専用 (実測) のため使わない** | v0.1 spike 対象 | references/codex-app-server-README.ja.md (全文訳) |
-| CC | ホストなので relay 不要。参加者としては CCD セッション間 send_message | v0.1 spike 対象 | ハーネス公式機能 |
+| CC | **ホスト専任。席にしない** (D11)。relay 不要 | 確定 (2026-08-07 CEO 判断) | 下記 D11 |
 | Grok | `grok agent serve` (WebSocket :2419 + secret) / `grok leader` (`~/.grok/leader.sock`, 複数 client で 1 backend 共有) / **ACP** | v0.2 spike | references/grok-build-integration.ja.md |
 | Gemini | **Antigravity 経由 3 経路**: 公式 Python SDK (`google.antigravity`) / コミュニティ ACP ラッパ (antigravity-acp) / agy への ACP native 実装 (公式 feature request 中)。agy 素体に serve 系なし (実測) | v0.2 spike (v5 の「✗」から昇格) | docs/architecture-ideal-vs-actual.md |
+
+### D11: CC を席にしない理由 (2026-08-07 確定)
+
+ホストは CEO との会話を全部見ている。議題の立て方も、CEO が何を気にしているかも、
+その設計を誰が書いたかも知っている。その状態で「独立した参加者の意見」を出すのは、
+**司会が自分の望む結論を参加者の口から言わせる**のと同じで、D3 (ホストは意見を言わない)
+の趣旨に正面から反する。しかも実装当事者は自分の実装を擁護する方向に偏る。
+
+技術的に可能な選択肢は 3 つあったが、いずれも席としては採らない:
+
+| 案 | 手数 | 独立性 | 席として読めるか | 判定 |
+|---|---|---|---|---|
+| ホストが CC 席も兼ねる | 0 回 | **最悪** (場外文脈を全部持つ) | ここが席 | **却下** |
+| 別 CC セッションを席にする | 貼付 or `send_message` | 良 | 可 | **保留** — `send_message` はツール説明で「background work のオーケストレーションに使うな」と明示されており、毎ラウンドの自動 relay は意図から外れる |
+| 使い捨て subagent に議事録だけ渡す | 0 回 | 良 (履歴なし) | **不可** | 「席」ではない。必要な時だけ **明示ラベル付きの第三者意見**として議事録に入れる運用に留める |
+
+**AI の頭数より独立性の方が価値が高い。** 先行 OSS (agent-review-panel) の既知の弱点は
+「全レビュアーが同一モデル = 共有バイアス」であり、本設計は異ベンダー構成でこれを構造的に
+避けている。そこを崩してまで CC を席にする利得がない。
 
 ### ACP 収束戦略 (v6 追加)
 
