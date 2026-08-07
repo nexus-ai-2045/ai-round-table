@@ -413,3 +413,19 @@ journal: {'...': 'merged', '...': 'failed'}
 | T4 | LOW | `test_stale_lock_is_reclaimed` は「回収された側が後から release する」系列を見ていない | **hold** (M2 とセット) |
 | T5 | LOW | 「並行」テストの大半が単一スレッドの逐次呼び出し (= `_merge_data` の代数的性質のテスト) | **partial**。H1/H2/H3 用に実スレッドのテストを追加したが、既存分の性格は変えていない |
 | T6 | LOW | `.tmp` 系 13 本はすべて擬似時計の単一スレッド。`.json` と `.tmp` の同時存在 / 救済後の再 collect / 別 invocation の `.tmp` 同居が未検査 | **hold** |
+
+## 未確認事項 #1 クローズ (2026-08-07) — 席はアプリに表示される
+
+DESIGN v6 §10 の「thread が Codex アプリのチャット一覧に出るか」を確認した。**出る。**
+
+- 機械的裏取り: `thread/list` の 25 件に、アプリの通常チャット (音声セッションの
+  引き継ぎ等) と**同列で** roundtable の席が入っている。
+  `019fd900-... | rt-tier1-final-codex` / `rt-spike-codex` ×2。
+  `thread/name/set` も効いており、preview には packet 本文が入っている。
+- UI 表示: CEO が実機で確認済み (2026-08-07)。
+
+これで chat-first の中核要件「席 = アプリ上の専用チャット / CEO が直接読める /
+会話履歴がアプリに残る」(DESIGN v6 §0) が**実測で全部満たされた**。
+
+残る Tier1 の穴は「CC 席がまだ Tier3」だけ (Codex のみ Tier1)。2 席の議題では
+CC の分だけ貼り付けが残るため、KPI ≤ 3 は 1 席議題でのみ達成できている。
