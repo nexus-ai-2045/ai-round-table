@@ -8,6 +8,11 @@
         snapshot/       参加者に渡す読み取り用スナップショット
         last-result.json  直近 CLI 結果 (パイプで exit code が消えても機械確認可)
         seats.json      席メタ (tier / thread_ref)
+    <root>/.integrity/<slug>/
+        journal.json.sha256 / seats.json.sha256   状態ファイルの hash 証跡
+        journal.json.lock   / seats.json.lock     read-modify-write の排他ロック
+
+証跡とロックだけ議題ディレクトリの外に出す (詳細は TopicPaths.integrity)。
 """
 import re
 from dataclasses import dataclass
@@ -31,6 +36,38 @@ class TopicPaths:
     @property
     def seats(self) -> Path:
         return self.root / "seats.json"
+
+    @property
+    def integrity(self) -> Path:
+        """状態ファイル / 議事録の hash 証跡・ロックの置き場。**議題ディレクトリの外**。
+
+        minutes.md / journal.json / seats.json は Tier1 の席の書込範囲
+        (sandbox=workspace-write, cwd=議題ディレクトリ) の中にある。証跡を同じ場所に
+        置くと、対象を書き換えられる相手が証跡も書き換えられるので照合が成立しない。
+        そこで `<root>/.integrity/<slug>/` (議題ディレクトリの 2 階層上) へ逃がす。
+
+        **ここは未検証の前提に乗っている** (2026-08-07 / レビュー H4):
+        「席がこの場所に届かない」は `workspace-write` の実効書込範囲が cwd 配下に
+        閉じていることを仮定している。実効範囲を決めるのはサーバ側で、repo 内にも
+        `references/` にも**それを示す一次情報が無い**。`turn/start` の
+        `sandboxPolicy.writableRoots` は追加リストであって上限指定ではない
+        (schema: `writableRoots` の既定は空 + `/tmp` と `$TMPDIR` は専用の除外
+        フラグで別管理) ため、送っても範囲を絞れない。閉じるには実測しかない:
+        席に `../../.integrity/<slug>/probe` への書き込みを 1 回試させ、拒否される
+        ことを spike 記録に残す。詳細と手順は docs/review-backlog.md。
+
+        なお path の入れ子関係 (証跡が議題ディレクトリの外にあること) はテストで
+        固定してある。前提が崩れているのは **sandbox の実効範囲** の方である。
+        """
+        return self.root.parent.parent / ".integrity" / self.root.name
+
+    def witness(self, name: str) -> Path:
+        """`name` (journal.json 等) の hash 証跡ファイル。"""
+        return self.integrity / f"{name}.sha256"
+
+    def lock(self, name: str) -> Path:
+        """`name` を read-modify-write する間だけ握るロックファイル。"""
+        return self.integrity / f"{name}.lock"
 
 
 def topic_dir(root: Path, slug: str) -> Path:
@@ -61,4 +98,6 @@ def ensure_topic(root: Path, slug: str) -> TopicPaths:
     snapshot = d / "snapshot"
     scratch.mkdir(parents=True, exist_ok=True)
     snapshot.mkdir(parents=True, exist_ok=True)
-    return TopicPaths(d, d / "minutes.md", d / "journal.json", scratch, snapshot)
+    tp = TopicPaths(d, d / "minutes.md", d / "journal.json", scratch, snapshot)
+    tp.integrity.mkdir(parents=True, exist_ok=True)
+    return tp

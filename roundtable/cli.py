@@ -11,6 +11,8 @@ import sys
 from pathlib import Path
 
 from . import minutes, packet, watcher
+from .filelock import LockTimeout
+from .integrity import StateTamperedError
 from .journal import Journal
 from .paths import ensure_topic
 from .relay import get_relay, load_seats, save_seats
@@ -18,6 +20,21 @@ from .relay import get_relay, load_seats, save_seats
 
 def _write_last_result(tp, payload: dict) -> None:
     minutes.atomic_write(tp.last_result, json.dumps(payload, ensure_ascii=False, indent=1))
+
+
+def _try_write_last_result(args, payload: dict) -> None:
+    """議題が特定できる時だけ last-result.json を残す (S2 の機械確認経路を切らさない)。
+
+    例外ハンドラからの最後の手当なので、ここで更に失敗しても新しい例外は投げない。
+    握り潰しではない: 呼び出し側が既に stderr へ本体の失敗を出している。
+    """
+    root, slug = getattr(args, "root", None), getattr(args, "slug", None)
+    if not root or not slug:
+        return
+    try:
+        _write_last_result(ensure_topic(Path(root), slug), payload)
+    except (OSError, ValueError):
+        pass
 
 
 def _cmd_new_topic(args) -> int:
@@ -121,37 +138,61 @@ def _cmd_dispatch(args) -> int:
     return _collect_one(tp, journal, inv, args.participant, args.timeout, delivered)
 
 
+def _leftover_tmps(tp) -> list[str]:
+    """scratch に残った未確定 `.tmp` の一覧 (CEO への誤誘導を防ぐ材料)。"""
+    try:
+        return sorted(p.name for p in tp.scratch.glob("*.tmp"))
+    except OSError:
+        return []
+
+
 def _collect_one(tp, journal, inv, participant, timeout_s, delivered: bool) -> int:
     result = watcher.collect(tp, journal, inv, participant, timeout_s=timeout_s)
     if result["ok"]:
         journal.advance_round_if_complete(minutes.parse_participants(tp))
         minutes.sync_round(tp, journal.round_no)
-        _write_last_result(
-            tp,
-            {
-                "ok": True,
-                "reason": "merged",
-                "invocation": inv,
-                "exit_code": 0,
-                "round": journal.round_no,
-            },
-        )
+        payload = {
+            "ok": True,
+            "reason": "merged",
+            "invocation": inv,
+            "exit_code": 0,
+            "round": journal.round_no,
+        }
+        if result.get("recovered") == "tmp":
+            # 来歴を機械可読側にも残す: 「通常経路で成功した」と last-result.json だけ見て
+            # 誤読されると、席の rename 漏れが恒久的に見えなくなる。
+            payload["recovered"] = "tmp"
+            payload["tmp"] = result.get("tmp")
+        _write_last_result(tp, payload)
         print(f"\n[ok] merge 完了 (invocation: {inv}) / round: {journal.round_no}")
+        if result.get("recovered") == "tmp":
+            print(f"[recovered-from-tmp] 通常経路ではない。未確定の .tmp から回収した: {result.get('tmp')}")
+            print("  席は出力を書いたが確定 (rename) していない。席側の手順漏れは未解決のまま残る。")
         return 0
 
     reason = result["reason"]
-    _write_last_result(
-        tp,
-        {
-            "ok": False,
-            "reason": reason,
-            "invocation": inv,
-            "exit_code": 1,
-        },
-    )
+    payload = {
+        "ok": False,
+        "reason": reason,
+        "invocation": inv,
+        "exit_code": 1,
+    }
+    if result.get("tmp"):
+        payload["tmp"] = result["tmp"]
+    if result.get("detail"):
+        payload["detail"] = result["detail"]
+    _write_last_result(tp, payload)
     print(f"\n[failed] invocation: {inv} / reason: {reason}")
-    if reason == "timeout":
-        if delivered:
+    if reason == "stalled-tmp":
+        print(f"[stalled-tmp] 席は出力を書いたが .tmp のまま確定 (rename) されていない: {result.get('tmp')}")
+        print(f"  採用しなかった理由: {result.get('detail')}")
+        print("  → 無応答 (timeout) ではない。貼り付けの有無ではなく席側の確定操作を確認してください。")
+    elif reason == "timeout":
+        leftovers = _leftover_tmps(tp)
+        if leftovers:
+            print(f"[tmp 残存] scratch に未確定の .tmp がある: {', '.join(leftovers)}")
+            print("  席が書きかけ / rename 前に停止した可能性。『未貼り付け』とは限らない。")
+        elif delivered:
             print("packet は搬出済み (delivered)。席に貼り付けたか確認してください (未貼り付け?)。")
         else:
             print("クリップボード搬出なし (--no-clipboard)。packet が席に届いていない可能性。")
@@ -183,6 +224,16 @@ def _cmd_status(args) -> int:
         print(f"failure_stats: {parts}")
     else:
         print("failure_stats: (none)")
+    conflicts = journal.conflicts()
+    if conflicts:
+        # 並行書き込みで解決できなかった記録。件数だけでも出さないと、
+        # 「消えた」と「衝突した」の区別が CEO 側で永久につかない。
+        print(f"write_conflicts: {len(conflicts)} 件 (journal.json の conflicts を参照)")
+        for c in conflicts:
+            print(
+                f"  {c.get('invocation')}  kept={c.get('kept', {}).get('state')}  "
+                f"dropped={c.get('dropped', {}).get('state')}  at={c.get('at')}"
+            )
     invocations = journal.data["invocations"]
     if not invocations:
         print("(invocation なし)")
@@ -305,7 +356,24 @@ def _build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     """entry point。テストから argv を直接渡して呼べる。"""
     args = _build_parser().parse_args(argv)
-    return args.func(args)
+    try:
+        return args.func(args)
+    except StateTamperedError as exc:
+        # fail-closed: 状態ファイル (journal / seats) や議事録が dispatcher 以外に
+        # 書かれていたら、その先の記録は信用できない。握り潰さず CEO に提示して止める。
+        # minutes.MinutesTamperedError もこの型なのでここに来る (exit 3)。
+        print(f"\n[tampered] 改ざんを検知した\n{exc}", file=sys.stderr)
+        return 3
+    except LockTimeout as exc:
+        # ロックを取れないまま書くと重ね合わせが不可分でなくなる (filelock の呼び出し規約:
+        # 「呼び出し側は失敗として記録すること」)。traceback で落とさず分類済み失敗にする。
+        print(f"\n[lock] 状態ファイルのロックを取得できなかった\n{exc}", file=sys.stderr)
+        print("  別の dispatch が書き込み中か、ロックの残骸が残っている可能性がある。",
+              file=sys.stderr)
+        _try_write_last_result(
+            args, {"ok": False, "reason": "lock", "detail": str(exc), "exit_code": 4}
+        )
+        return 4
 
 
 if __name__ == "__main__":

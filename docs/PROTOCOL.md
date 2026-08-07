@@ -131,9 +131,26 @@ Desktop socket 不在なら **実席は Tier3 貼付が本線** (2026-08-07 実�
 | `parse` | JSON として読めなかった (grace period 後も) | そのまま提示。CEO の指示待ち |
 | `schema` | 出力契約 (invocation_id/participant/opinion/claims) を満たさない | 違反理由をそのまま提示 |
 | `id-mismatch` | invocation_id または participant が発行時と不一致 (貼り間違い等) | 別 invocation の混入として提示 |
-| `tampered` | merge 前の minutes.md hash 照合失敗 | dispatcher 外での改変の可能性を明示、CEO 判断待ち |
+| `tampered` | minutes.md が hash 証跡と不一致 (dispatcher 外で書き換えられた) | dispatcher 外での改変の可能性を明示、CEO 判断待ち |
 
 いずれも journal に記録され、`close` 時の失敗一覧に必ず現れる (偽装成功防止)。
+
+**`tampered` は「他の席が並行 merge した」では出ない** (2026-08-07 修正)。判定は
+snapshot 採取時 hash ではなく `.integrity/<slug>/minutes.md.sha256` との照合なので、
+dispatcher 経由の追記は何本入っても一致する。出たら本当に dispatcher 外の書き換えである。
+
+### CLI の exit code
+
+| code | 意味 | `last-result.json` の `reason` |
+|---|---|---|
+| 0 | 成功 | `merged` / `async` |
+| 1 | 上表の失敗分類 | `timeout` / `parse` / `schema` / `id-mismatch` / `tampered` / `relay` |
+| 2 | 引数エラー (未知 invocation 等) | (書かれない) |
+| 3 | 改ざん検知 (journal / seats / minutes が証跡と不一致) | (書かれない / stderr に提示) |
+| 4 | 状態ファイルのロックを取得できなかった | `lock` |
+
+exit 4 は「書けなかった」であって「失敗が確定した」ではない。ロックの残骸か並行
+dispatch の輻輳なので、状況を確認してから同じコマンドを再実行してよい。
 
 ## 5. 補足
 

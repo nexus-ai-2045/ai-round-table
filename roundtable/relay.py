@@ -11,6 +11,8 @@ import json
 from pathlib import Path
 from typing import Protocol
 
+from . import integrity
+from .filelock import FileLock
 from .paths import TopicPaths
 
 
@@ -30,16 +32,60 @@ def seats_path(tp: TopicPaths) -> Path:
     return tp.seats
 
 
+_SEATS_NAME = "seats.json"
+
+
 def load_seats(tp: TopicPaths) -> dict:
-    if not tp.seats.exists():
+    """席メタを読む。dispatcher 以外に書き換えられていたら fail-closed (ValueError)。
+
+    読みもロック配下で行う (journal._read_verified と同じ理由 / レビュー H1・H2)。
+    `verify_and_read` は証跡を書きうるので、ロック外で呼ぶと writer の pending 窓に
+    割り込んで偽の改ざん検知を作り、Windows では writer の `os.replace` も壊す。
+    """
+    with FileLock(tp.lock(_SEATS_NAME)):
+        raw = integrity.verify_and_read(tp.seats, tp.witness(_SEATS_NAME))
+    if raw is None:
         return {}
-    return json.loads(tp.seats.read_text(encoding="utf-8"))
+    return json.loads(raw.decode("utf-8"))
+
+
+def merge_seats(disk: dict, local: dict) -> dict:
+    """席メタを **席 (key) 単位** で重ねた新しい dict を返す。
+
+    同じ席が両方に在れば local を採る (自分が今送った結果が最新)。ただし
+    `thread_ref` だけはディスク側を落とさない: 席の同一性を失うと次ラウンドが
+    thread/resume でなく thread/start に落ち、CEO が見ていない別チャットへ席が
+    分裂する (relay_codex._resume_thread)。
+    `fallback_reason` は引き継がない。消えた失敗痕跡を復活させるのではなく、
+    invocation 単位の失敗記録 (journal の delivered detail) を正とする。
+    """
+    out = dict(disk)
+    for key, seat in local.items():
+        cur = out.get(key)
+        if isinstance(cur, dict) and isinstance(seat, dict):
+            seat = dict(seat)
+            if not seat.get("thread_ref") and cur.get("thread_ref"):
+                seat["thread_ref"] = cur["thread_ref"]
+        out[key] = seat
+    return out
 
 
 def save_seats(tp: TopicPaths, data: dict) -> None:
-    from .minutes import atomic_write
+    """席メタを read-modify-write で書く (全文上書きしない)。
 
-    atomic_write(tp.seats, json.dumps(data, ensure_ascii=False, indent=1))
+    旧実装は load 時のスナップショットを全文書き戻していた。relay.send の寿命
+    (Tier1 は thread/start 300s + turn/start 120s) がそのまま競合窓になり、
+    並行 dispatch では他席のエントリごと消える (2026-08-07 実測: 一方の
+    tier=3 + fallback_reason が消滅)。journal.save と同じ方針に揃える。
+    """
+    witness = tp.witness(_SEATS_NAME)
+    with FileLock(tp.lock(_SEATS_NAME)):
+        raw = integrity.verify_and_read(tp.seats, witness)
+        disk = json.loads(raw.decode("utf-8")) if raw is not None else {}
+        merged = merge_seats(disk, data)
+        integrity.write_verified(
+            tp.seats, json.dumps(merged, ensure_ascii=False, indent=1), witness
+        )
 
 
 class FallbackRelay:
