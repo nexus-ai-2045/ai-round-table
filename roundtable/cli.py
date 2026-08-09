@@ -61,6 +61,48 @@ def _cmd_set_background(args) -> int:
     return 0
 
 
+def _close_relay(relay) -> None:
+    """席のプロセス木を回収する (Tier3 は no-op)。
+
+    **collect の後に呼ぶこと**: codex の `turn/start` は投げっぱなしで、返った時点では
+    席がまだ書いている。collect より前に閉じると実行中の席を殺す。
+
+    2026-08-07 レビュー H2: `close()` は実装済みなのに **本番の呼び出し元が無かった**。
+    Windows は Job Object の KILL_ON_JOB_CLOSE で Python 終了時に木ごと落ちるので
+    偶然助かっていたが、POSIX は `killpg` が一度も走らず、CLI 終了後に席のプロセス木
+    (実測 1 席 10 プロセス) が孤児として残る。
+
+    回収の失敗で dispatch の exit code を変えない (packet の搬出・回収はもう終わって
+    いる)。ただし黙って捨てず stderr に出す。
+    """
+    close = getattr(relay, "close", None)
+    if close is None:
+        return
+    try:
+        close()
+    except Exception as exc:  # 回収失敗は本線の成否を変えない
+        print(f"[warn] 席プロセスの回収に失敗した: {exc}", file=sys.stderr)
+
+
+def _warn_if_integrity_detection_does_not_hold(participant: str, tier: int) -> None:
+    """検知できない席では「検知できないこと」を必ず画面に出す。
+
+    `.integrity` の改ざん検知は「席が証跡に届かない」前提の上に立っている
+    (`paths.TopicPaths.integrity`)。grok 席ではこの前提が **実測で破れている**:
+    Windows で grok の sandbox は一次 docs の Platform Support 表に載っておらず、
+    実測でも席は `run_terminal_command` で PowerShell を任意実行できた
+    (spike `raw-grok-p3-packet.jsonl` / 絶対パス指定の `[System.IO.File]::WriteAllText`)。
+    黙っていると CEO は「grok 席が立った瞬間に改ざん検知が無効化された」ことを
+    知る手段が無い (2026-08-07 レビュー H3)。
+    """
+    if tier == 1 and participant == "grok":
+        print(
+            "[warn] grok 席 (tier=1) では `.integrity` の改ざん検知は成立しない: "
+            "席は PowerShell を任意実行でき、証跡の置き場 (<root>/.integrity/) にも届く "
+            "(2026-08-07 実測)。journal / seats / minutes の照合結果を無条件に信用しないこと。"
+        )
+
+
 def _cmd_dispatch(args) -> int:
     """指名 1 席分の packet を出し、既定では collect まで実行する。"""
     tp = ensure_topic(Path(args.root), args.slug)
@@ -73,69 +115,77 @@ def _cmd_dispatch(args) -> int:
     print(text)
 
     tier = args.tier
-    if args.no_clipboard and tier == 3:
-        # 明示的に搬出せず、packet を stdout のみ
-        delivered = False
-        relay_label = "stdout-only"
-    else:
-        seats = load_seats(tp)
-        seat_key = f"rt/{args.slug}/{args.participant}"
-        seat = seats.get(seat_key, {
-            "participant": args.participant,
-            "topic": args.slug,
-            "surface": args.participant,
-            "tier": tier,
-        })
-        seat["topic"] = args.slug
-        seat["thread_name"] = f"rt-{args.slug}-{args.participant}"
-        # cwd は議題ディレクトリに限定する: Tier1 の sandbox 書込範囲がここになる。
-        relay = get_relay(
-            args.participant, tier=tier, allow_fallback=True, cwd=str(tp.root.resolve())  # 相対 --root だと spawn 先で二重解決になる (P2)
-        )
-        try:
-            relay_label = relay.send(seat, text)
-        except Exception as exc:  # Tier3 失敗など
-            journal.set_state(inv, "failed", f"relay: {exc}")
+    relay = None
+    try:
+        if args.no_clipboard and tier == 3:
+            # 明示的に搬出せず、packet を stdout のみ
+            delivered = False
+            relay_label = "stdout-only"
+        else:
+            seats = load_seats(tp)
+            seat_key = f"rt/{args.slug}/{args.participant}"
+            seat = seats.get(seat_key, {
+                "participant": args.participant,
+                "topic": args.slug,
+                "surface": args.participant,
+                "tier": tier,
+            })
+            seat["topic"] = args.slug
+            seat["thread_name"] = f"rt-{args.slug}-{args.participant}"
+            # cwd は議題ディレクトリに限定する: Tier1 の sandbox 書込範囲がここになる。
+            relay = get_relay(
+                args.participant, tier=tier, allow_fallback=True, cwd=str(tp.root.resolve())  # 相対 --root だと spawn 先で二重解決になる (P2)
+            )
+            try:
+                relay_label = relay.send(seat, text)
+            except Exception as exc:  # Tier3 失敗など
+                journal.set_state(inv, "failed", f"relay: {exc}")
+                _write_last_result(
+                    tp,
+                    {
+                        "ok": False,
+                        "reason": "relay",
+                        "detail": str(exc),
+                        "invocation": inv,
+                        "exit_code": 1,
+                    },
+                )
+                print(f"\n[failed] invocation: {inv} / reason: relay / {exc}")
+                return 1
+            seat["tier"] = relay.tier
+            seats[seat_key] = seat
+            save_seats(tp, seats)
+            journal.set_state(inv, "delivered", f"tier{relay.tier}:{relay_label}")
+            delivered = True
+            if relay.tier == 3:
+                print("\n[clipboard] packet をクリップボードに載せた。席のチャットに貼り付けてください。")
+                journal.record_human_action("tier3_paste_required", inv)
+            else:
+                print(f"\n[tier1] packet を席へ送った (tier={relay.tier}, label={relay_label})。")
+            if "fallback" in str(relay_label):
+                print(f"[fallback] Tier1 失敗のため Tier3 に縮退: {relay_label}")
+            _warn_if_integrity_detection_does_not_hold(args.participant, relay.tier)
+
+        if args.async_dispatch:
             _write_last_result(
                 tp,
                 {
-                    "ok": False,
-                    "reason": "relay",
-                    "detail": str(exc),
+                    "ok": True,
+                    "reason": "async",
                     "invocation": inv,
-                    "exit_code": 1,
+                    "delivered": delivered,
+                    "exit_code": 0,
                 },
             )
-            print(f"\n[failed] invocation: {inv} / reason: relay / {exc}")
-            return 1
-        seat["tier"] = relay.tier
-        seats[seat_key] = seat
-        save_seats(tp, seats)
-        journal.set_state(inv, "delivered", f"tier{relay.tier}:{relay_label}")
-        delivered = True
-        if relay.tier == 3:
-            print("\n[clipboard] packet をクリップボードに載せた。席のチャットに貼り付けてください。")
-            journal.record_human_action("tier3_paste_required", inv)
-        else:
-            print(f"\n[tier1] packet を席へ送った (tier={relay.tier}, label={relay_label})。")
-        if "fallback" in str(relay_label):
-            print(f"[fallback] Tier1 失敗のため Tier3 に縮退: {relay_label}")
+            print(f"\n[async] invocation: {inv} — collect は別途 `collect` で回収")
+            return 0
 
-    if args.async_dispatch:
-        _write_last_result(
-            tp,
-            {
-                "ok": True,
-                "reason": "async",
-                "invocation": inv,
-                "delivered": delivered,
-                "exit_code": 0,
-            },
-        )
-        print(f"\n[async] invocation: {inv} — collect は別途 `collect` で回収")
-        return 0
-
-    return _collect_one(tp, journal, inv, args.participant, args.timeout, delivered)
+        return _collect_one(tp, journal, inv, args.participant, args.timeout, delivered)
+    finally:
+        # `--async` は「搬出だけして席を動かしたまま返る」契約なので閉じない。
+        # それ以外は collect が終わった後なので、ここが唯一の回収点になる。
+        if relay is not None and not args.async_dispatch:
+            _close_relay(relay)
 
 
 def _leftover_tmps(tp) -> list[str]:
@@ -234,6 +284,24 @@ def _cmd_status(args) -> int:
                 f"  {c.get('invocation')}  kept={c.get('kept', {}).get('state')}  "
                 f"dropped={c.get('dropped', {}).get('state')}  at={c.get('at')}"
             )
+    # 席の tier を出す。tier だけ見えても仕方ないが、tier=1 の grok 席は
+    # `.integrity` の検知が成立しない席なので、そこを CEO に必ず見せる (レビュー H3)。
+    seats = load_seats(tp)
+    if seats:
+        print("seats:")
+        for key, seat in sorted(seats.items()):
+            tier = seat.get("tier")
+            line = f"  {key}  tier={tier}"
+            if seat.get("fallback_reason"):
+                line += f"  fallback_reason: {seat['fallback_reason']}"
+            log = seat.get("permission_log")
+            if log:
+                line += f"  permissions: {len(log)} 件"
+                if seat.get("permission_log_partial"):
+                    line += " (turn 未完 — 全件とは限らない)"
+            print(line)
+            _warn_if_integrity_detection_does_not_hold(seat.get("participant", ""), tier)
+
     invocations = journal.data["invocations"]
     if not invocations:
         print("(invocation なし)")

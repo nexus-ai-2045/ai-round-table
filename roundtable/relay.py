@@ -1,9 +1,16 @@
-"""relay 層 — 1 契約のみ (DESIGN v6 §4 + v0.2 Phase 1)。
+"""relay 層 — 契約 (DESIGN v6 §4 + v0.2 Phase 1)。
 
     send(seat, text) -> str   # 搬出結果ラベル (delivered / tier1-sent / ...)
     poll(seat) -> str | None  # 席からの生出力 (未使用時は None; watcher が scratch を見る)
+    close() -> None           # 席プロセス木の回収 (Tier3 は no-op)
 
 Tier1 障害時は Tier3 に縮退する。Tier2 (UI 自動化) へは自動昇格しない。
+
+`close` を契約に入れたのは 2026-08-07 レビュー H2 の指摘による: 実装は前からあったのに
+**本番の呼び出し元がゼロ**で、Windows では Job Object の KILL_ON_JOB_CLOSE が
+Python 終了時に木ごと落としてくれて偶然助かっていた。POSIX は `killpg` 経路が一度も
+走らず、CLI 終了後に席のプロセス木 (実測 1 席 10 プロセス) が孤児として残る。
+呼び出し規約は `cli._close_relay` の docstring を参照 (collect の **後** に閉じる)。
 """
 from __future__ import annotations
 
@@ -26,6 +33,8 @@ class Relay(Protocol):
     def send(self, seat: dict, text: str) -> str: ...
 
     def poll(self, seat: dict) -> str | None: ...
+
+    def close(self) -> None: ...
 
 
 def seats_path(tp: TopicPaths) -> Path:
@@ -55,7 +64,8 @@ def merge_seats(disk: dict, local: dict) -> dict:
     同じ席が両方に在れば local を採る (自分が今送った結果が最新)。ただし
     `thread_ref` だけはディスク側を落とさない: 席の同一性を失うと次ラウンドが
     thread/resume でなく thread/start に落ち、CEO が見ていない別チャットへ席が
-    分裂する (relay_codex._resume_thread)。
+    分裂する (relay_codex._resume_thread / relay_grok._load_session — grok の
+    `sessionId` もここに入れているので、保護対象は 1 つの key のままでよい)。
     `fallback_reason` は引き継がない。消えた失敗痕跡を復活させるのではなく、
     invocation 単位の失敗記録 (journal の delivered detail) を正とする。
     """
@@ -114,6 +124,18 @@ class FallbackRelay:
     def poll(self, seat: dict) -> str | None:
         return self._active.poll(seat)
 
+    def close(self) -> None:
+        """preferred / fallback の両方を閉じる。
+
+        `_active` だけ閉じるのでは足りない: 縮退した round では preferred が既に
+        プロセスを起こしており (`_ensure` は `send` の中で走る)、そちらが回収対象。
+        `close` を持たない relay (テストの spy 等) は素通りする。
+        """
+        for relay in (self._preferred, self._fallback):
+            close = getattr(relay, "close", None)
+            if close is not None:
+                close()
+
 
 def get_relay(
     participant: str,
@@ -134,11 +156,18 @@ def get_relay(
     if tier == 2:
         # DESIGN: Tier2 は CEO 明示承認まで実装しない。要求されても Tier3 に落とす。
         return Tier3Relay()
-    if tier == 1 and participant == "codex":
-        from .relay_codex import CodexAppServerRelay
+    if tier == 1:
+        preferred: Relay | None = None
+        if participant == "codex":
+            from .relay_codex import CodexAppServerRelay
 
-        preferred = CodexAppServerRelay(cwd=cwd)
-        if allow_fallback:
-            return FallbackRelay(preferred, Tier3Relay())
-        return preferred
+            preferred = CodexAppServerRelay(cwd=cwd)
+        elif participant == "grok":
+            from .relay_grok import GrokAcpRelay
+
+            preferred = GrokAcpRelay(cwd=cwd)
+        if preferred is not None:
+            if allow_fallback:
+                return FallbackRelay(preferred, Tier3Relay())
+            return preferred
     return Tier3Relay()

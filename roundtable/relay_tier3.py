@@ -12,3 +12,11 @@ class Tier3Relay:
     def poll(self, seat: dict) -> str | None:
         # 出力は scratch 監視 (watcher) が担当。relay は搬出のみ。
         return None
+
+    def close(self) -> None:
+        """Tier3 はプロセスを持たないので no-op。
+
+        契約 (`relay.Relay`) を満たすためだけに置く。呼び出し側が
+        `hasattr` で分岐しなくて済むようにする。
+        """
+        return None

@@ -10,10 +10,13 @@ snapshot 時 hash と照合して fail-closed にしているのに、journal.js
 対象と同じ場所に置くと、対象を書き換えられる相手が証跡も書き換えられ、照合が
 成立しない。席の cwd は議題ディレクトリに限定してあるので、そこから外へ逃がす。
 
-ただし **「席がそこへ届かない」は未検証の前提** である (2026-08-07 / レビュー H4)。
-`workspace-write` の実効書込範囲を決めるのはサーバ側で、repo 内に裏取りが無い。
-前提が破れた場合、この module の検知は丸ごと無効になる (席が本文と証跡を両方
-書ける)。検証手順は `TopicPaths.integrity` の docstring と docs/review-backlog.md。
+ただし **「席がそこへ届かない」は席ごとに成否が違う** (2026-08-07 / レビュー H4・H3)。
+codex 席では `workspace-write` の実効書込範囲を決めるのはサーバ側で、repo 内に裏取りが
+無い (未検証)。**grok 席では実測で破れている**: 席は `run_terminal_command` で
+PowerShell を任意実行でき、絶対パス指定の書き込みが通る (spike 実測)。
+前提が破れた席では、この module の検知は丸ごと無効になる (席が本文と証跡を両方
+書ける)。grok 席が立った議題では CLI が dispatch / status で必ずその旨を印字する。
+検証手順は `TopicPaths.integrity` の docstring と docs/review-backlog.md。
 
 **中断した書き込みを改ざんと呼ばないための 2 段記録**: 本文と証跡は別ファイルなので、
 その間でプロセスが死ぬと必ず不一致になる。それを改ざん扱いにすると、事故のたびに
