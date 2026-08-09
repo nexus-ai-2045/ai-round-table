@@ -14,13 +14,13 @@ from __future__ import annotations
 import json
 import os
 import queue
-import signal
 import subprocess
 import threading
 import time
 from typing import Any
 
 from .relay import RelayError
+from .relay_process import ProcessTree
 
 
 # 実測 (2026-08-06, Windows / codex-cli 0.144.6):
@@ -68,13 +68,40 @@ def _probe_version(path: str) -> tuple[int, ...]:
     return _parse_version((out.stdout or "") + (out.stderr or ""))
 
 
+class UnsupportedCodexError(RelayError):
+    """PATH 上の codex が**全て**実測で MIN_APP_SERVER_VERSION 未満だった。
+
+    RelayError を継承しているので FallbackRelay の既存 `except RelayError` が
+    そのまま拾い、Tier3 へ即縮退する (分岐を足さずに済む)。
+    """
+
+    def __init__(self, path: str, version: tuple[int, ...]):
+        self.path = path
+        self.version = version
+        shown = ".".join(str(x) for x in version) or "unknown"
+        need = ".".join(str(x) for x in MIN_APP_SERVER_VERSION)
+        super().__init__(
+            f"codex {shown} < {need} (app-server が thread/start に応答しない版): "
+            f"{path}. PATH 上に他の候補も無いので Tier1 は成立しない"
+        )
+
+
 def resolve_codex_binary(preferred: str | None = None) -> str:
     """app-server が使える codex を選ぶ。
 
     素の "codex" を信じない: PATH 先頭が古い版だと thread/start が無応答になり、
     Tier1 が「遅い」ではなく「絶対に届かない」状態になる (実測)。
     PATH 上の候補を全部見て、MIN_APP_SERVER_VERSION 以上の最初の 1 本を返す。
-    見つからなければ最も新しい候補を返す (呼び出し側が RelayError で縮退できる)。
+
+    候補が全部「実測で下回っていた」場合は **UnsupportedCodexError を即上げる**。
+    以前は最も新しい古版を返していたが、それだと呼び出し側は
+    initialize に成功したあと thread/start の 300s 枠を丸ごと待ってから縮退し、
+    doctor も 180s 待ってから既知の非互換を報告する。届かないと分かっている相手を
+    待つ理由が無いので、解決の時点で落として縮退と診断の応答性を守る。
+
+    版が**読めなかった**候補は落とさない (`--version` の出力形式が変わっただけの
+    可能性があり、古いという積極的な証拠が無い)。読めない候補が 1 本でもあれば
+    それを返して実際に喋らせる。
     """
     if preferred:
         return preferred
@@ -89,117 +116,28 @@ def resolve_codex_binary(preferred: str | None = None) -> str:
                 continue
             seen.add(cand)
             candidates.append(cand)
-    best: tuple[tuple[int, ...], str] | None = None
+    newest_old: tuple[tuple[int, ...], str] | None = None
+    unknown: str | None = None
     for cand in candidates:
         ver = _probe_version(cand)
         if ver >= MIN_APP_SERVER_VERSION:
             return cand
-        if ver and (best is None or ver > best[0]):
-            best = (ver, cand)
-    if best:
-        return best[1]
-    return candidates[0] if candidates else "codex"
+        if ver:
+            if newest_old is None or ver > newest_old[0]:
+                newest_old = (ver, cand)
+        elif unknown is None:
+            unknown = cand
+    if unknown:
+        return unknown
+    if newest_old:
+        raise UnsupportedCodexError(newest_old[1], newest_old[0])
+    return "codex"  # 候補ゼロ。spawn 時に OSError で速く落ちる
 
 
-class _ProcessTree:
-    """spawn した app-server とその子孫をまとめて回収するための箱。
-
-    親を terminate しても子孫は道連れにならない (Windows の TerminateProcess も
-    POSIX の SIGTERM も直接の対象しか殺さない)。app-server は sandbox 内で
-    コマンドを実行しうるので、親の終了経路とは別に「木ごと」の回収経路が要る。
-
-    - Windows: Job Object + JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE。
-      ハンドルを閉じた時点で木ごと確実に終わる (terminate が成功した経路でも取りこぼさない)。
-    - POSIX: start_new_session=True で新しいプロセスグループにし、killpg で木ごと送る。
-    """
-
-    def __init__(self) -> None:
-        self._job = None
-
-    def spawn_kwargs(self) -> dict:
-        """Popen に渡す追加引数 (POSIX のみプロセスグループを分離する)。"""
-        return {} if os.name == "nt" else {"start_new_session": True}
-
-    def adopt(self, proc: subprocess.Popen) -> None:
-        """spawn 済みプロセスを木の管理下に置く (Windows のみ実体がある)。"""
-        if os.name != "nt":
-            return
-        try:
-            import ctypes
-            from ctypes import wintypes
-
-            k32 = ctypes.WinDLL("kernel32", use_last_error=True)
-            job = k32.CreateJobObjectW(None, None)
-            if not job:
-                return
-
-            class _BasicLimit(ctypes.Structure):
-                _fields_ = [
-                    ("PerProcessUserTimeLimit", ctypes.c_int64),
-                    ("PerJobUserTimeLimit", ctypes.c_int64),
-                    ("LimitFlags", wintypes.DWORD),
-                    ("MinimumWorkingSetSize", ctypes.c_size_t),
-                    ("MaximumWorkingSetSize", ctypes.c_size_t),
-                    ("ActiveProcessLimit", wintypes.DWORD),
-                    ("Affinity", ctypes.c_size_t),
-                    ("PriorityClass", wintypes.DWORD),
-                    ("SchedulingClass", wintypes.DWORD),
-                ]
-
-            class _IoCounters(ctypes.Structure):
-                _fields_ = [(n, ctypes.c_uint64) for n in
-                            ("ReadOperationCount", "WriteOperationCount",
-                             "OtherOperationCount", "ReadTransferCount",
-                             "WriteTransferCount", "OtherTransferCount")]
-
-            class _ExtLimit(ctypes.Structure):
-                _fields_ = [
-                    ("BasicLimitInformation", _BasicLimit),
-                    ("IoInfo", _IoCounters),
-                    ("ProcessMemoryLimit", ctypes.c_size_t),
-                    ("JobMemoryLimit", ctypes.c_size_t),
-                    ("PeakProcessMemoryUsed", ctypes.c_size_t),
-                    ("PeakJobMemoryUsed", ctypes.c_size_t),
-                ]
-
-            info = _ExtLimit()
-            info.BasicLimitInformation.LimitFlags = 0x2000  # KILL_ON_JOB_CLOSE
-            k32.SetInformationJobObject(job, 9, ctypes.byref(info), ctypes.sizeof(info))
-            handle = int(proc._handle)  # type: ignore[attr-defined]
-            if k32.AssignProcessToJobObject(job, handle):
-                self._job = job
-            else:
-                k32.CloseHandle(job)
-        except Exception:
-            self._job = None  # Job が使えなくても kill_tree のフォールバックがある
-
-    def kill_tree(self, pid: int) -> None:
-        """まだ生きている子孫を強制終了する (terminate で死ななかった時)。"""
-        if os.name == "nt":
-            try:
-                subprocess.run(
-                    ["taskkill", "/T", "/F", "/PID", str(pid)],
-                    check=False, shell=False, capture_output=True, timeout=10,
-                )
-            except (OSError, subprocess.SubprocessError):
-                pass
-            return
-        try:
-            os.killpg(os.getpgid(pid), signal.SIGKILL)  # POSIX: グループごと
-        except (OSError, ProcessLookupError):
-            pass
-
-    def close(self) -> None:
-        """Job を閉じる = Windows では木ごと確実に終わる。terminate 成功時の取りこぼし対策。"""
-        if self._job is None:
-            return
-        try:
-            import ctypes
-
-            ctypes.WinDLL("kernel32", use_last_error=True).CloseHandle(self._job)
-        except Exception:
-            pass
-        self._job = None
+# プロセスツリー回収は Grok 席と共通 (roundtable/relay_process.py へ移設)。
+# 旧名 `_ProcessTree` はこのモジュール内の参照 / 既存テストの monkeypatch 経路を
+# 維持するための別名で、実体は共有クラス 1 つだけ。
+_ProcessTree = ProcessTree
 
 
 class CodexAppServerRelay:

@@ -19,7 +19,7 @@ v0.2 は MPC + FDE 次元圧縮により **主軸 A (手数) + detector 3 個** 
 | L9 | merge_opinion 単体の escape | **hold** (defense-in-depth は v0.3) |
 | S1 | 背景を書く CLI が無い | **done v0.2** (`--background` / `set-background`) |
 | S2 | パイプで exit code が消える | **done v0.2** (`last-result.json` + PROTOCOL 明記) |
-| S3 | Tier3 貼付可否が不明 | **done partial v0.2** (縮退 + `tier3_paste_required`)。実席本線=Tier3。`thread/list` のみ go / start·resume·turn no-go (2026-08-07) |
+| S3 | Tier3 貼付可否が不明 | **done partial v0.2** (縮退 + `tier3_paste_required`)。実席本線 = **Tier1** (Codex, 2026-08-06 `tier1-final` で実往復成立)。旧記述「実席本線=Tier3。`thread/list` のみ go / start·resume·turn no-go」(2026-08-07 追記) は**誤判定であり撤回**: 判定に使った doctor が (a) PATH 先頭の旧 codex 0.130.0-alpha.5 を掴み `thread/start` に無応答、(b) `start_timeout` 既定 5s (実測は 20.9-58.4s) の 2 バグを持ち、環境が正常でも必ず「Tier1 不可」と出る構造だった。`thread/list` が go という観測自体は正しく、`start`/`resume`/`turn/start` も稼働している (誤って no-go と混同されていた)。詳細: 下記「PR #6 の no-go 判定を撤回」節。Tier3 は縮退経路として引き続き健在 |
 
 ## v0.2 で置いた detector (修正ではなく検知)
 
@@ -173,6 +173,22 @@ PR #6 (別セッション, merge 済み) は「Desktop attach no-go / `thread/st
 議事録 Round 1 に codex の意見 + claims 表 (evidence_type=observed) が merge 済み。
 
 **なお Desktop control socket が無いこと自体は PR #6 の観測どおり (Windows で未作成)。**
+
+### 撤回の波及先 (2026-08-08 / PR #7 レビュー P2-b で発覚)
+
+撤回を review-backlog に書いただけでは足りなかった。**手順書が古い結論のまま残っていた**:
+[`spike-results-v0.2.md`](spike-results-v0.2.md) は「自前 spawn 書込 no-go /
+Tier3 が本線 / CEO が packet を貼付」と読者に指示し続けていた。
+この文書は spike 記録**兼**運用手順書なので、放置すると次の担当者は撤回済みの
+手順で運用する。CLAUDE.md の「同じ事実を 2 箇所に置かない」が効かない構造
+(記録と手順が同居している) が原因。
+
+対応: 先頭に撤回バナー / 旧測定は「旧バイナリでの記録」と明示して保存 /
+go-no-go 表を前後比較に書き換え / 運用コマンドを Tier1 版に差し替え、Tier3 は
+縮退時の手順として分離。
+
+**残る負債**: 同文書が記録と手順を兼ねている点は未解消。手順を別ファイルに
+切り出すのが筋だが、v0.3 で運用手順が固まってからにする (今分けると両方動く)。
 no-go だったのは「Desktop への attach」であって、**spawn した app-server 経由の Tier1 は成立する**。
 この 2 つが混同されていた。
 
@@ -356,6 +372,14 @@ journal: {'...': 'merged', '...': 'failed'}
 
 ### H4 — 「証跡は席の書込範囲の外」は未検証の前提 (一部採用 / 修正案は却下)
 
+> **更新 (2026-08-07 / 下記 H3 対応)**: この節の結論は **codex 席についてのみ有効**。
+> **grok 席では前提が実測で破れている** — 席は `run_terminal_command` で PowerShell を
+> 任意実行でき (Windows で grok の sandbox は一次 docs の Platform Support 表に不在)、
+> spike 生ログ `raw-grok-p3-packet.jsonl` には絶対パス指定の
+> `[System.IO.File]::WriteAllText` が残っている。cwd は境界として機能していない。
+> したがって **grok 席が立った議題では `.integrity` の改ざん検知は成立しない**。
+> 下記「grok 席では改ざん検知が成立しない」節を参照。
+
 **採用した部分**: repo 内にも `references/` にも `workspace-write` の実効書込範囲を
 示す一次情報が無く、`paths.py` / `integrity.py` の docstring は未検証の命題を断定で
 書いていた。既存テスト `test_witness_lives_outside_the_seat_writable_area` も、
@@ -427,5 +451,156 @@ DESIGN v6 §10 の「thread が Codex アプリのチャット一覧に出るか
 これで chat-first の中核要件「席 = アプリ上の専用チャット / CEO が直接読める /
 会話履歴がアプリに残る」(DESIGN v6 §0) が**実測で全部満たされた**。
 
-残る Tier1 の穴は「CC 席がまだ Tier3」だけ (Codex のみ Tier1)。2 席の議題では
-CC の分だけ貼り付けが残るため、KPI ≤ 3 は 1 席議題でのみ達成できている。
+~~残る Tier1 の穴は「CC 席がまだ Tier3」だけ (Codex のみ Tier1)。2 席の議題では
+CC の分だけ貼り付けが残るため、KPI ≤ 3 は 1 席議題でのみ達成できている。~~
+→ 前提が 2 つ変わった: (a) **CC は席にしない** (D11 / 2026-08-07 CEO 判断) ので
+「CC 席が Tier3」という穴は消滅した。(b) **Grok 席の Tier1 が入った**
+(`roundtable/relay_grok.py`)。2 席議題の Tier1 全席化については下記「2 席 Tier1 の
+統合検証」節を参照。
+
+## 2 席 Tier1 の統合検証 (2026-08-07 / 模擬席)
+
+Grok Tier1 (`relay_grok.py`) 追加後、**codex 相当 + grok 相当の 2 席で 1 議題 2 round**
+を通し、軸 A KPI (人間の手数) が席数・round 数で増えないことを機械的に確認した。
+
+検証: `tests/test_v02_two_seat_tier1_mock.py` (8 本)。**実 CLI は起動していない** —
+codex app-server / grok ACP の口を fake stdio に差し替え、`cli.main` は本物のまま
+4 回 dispatch する。模擬席は packet の指示どおり `<inv>.json.tmp` → rename で確定させる
+(契約をテストの都合で緩めない)。
+
+| 観点 | 結果 |
+|---|---|
+| 軸 A KPI (Tier1) | `human_actions` = `new-topic` ×1 + `dispatch` ×4 = **5 件**。`tier3_paste_required` **0 件** |
+| 対照実験 (同手順 Tier3) | **9 件** (= 5 + 貼り付け 4)。差分 4 件がそのまま「自動化で消えた手数」 |
+| 席の同一性 | 2 round 目は codex が `thread/resume` (同じ `threadId`)、grok が `session/load` (同じ `sessionId`)。新規作成に落ちない = 席が分裂しない |
+| 議事録 / round | Round 1・2 に 2 席分が merge、`round` は機械的に 3 へ。`conflicts` 0 |
+| 縮退の粒度 | grok 席だけ落とすと **その席だけ** tier=3 + `fallback_reason`。codex は tier=1 のまま、貼り付けも 1 件だけ増える |
+| 書込境界 | 2 席とも `cwd` = 議題ディレクトリ (`thread/start` / `session/new` の params で固定) |
+
+**テストが本当にバグを捕まえる証拠** (実装を壊して落ちることを確認):
+
+| 変異 | 落ちたテスト |
+|---|---|
+| `relay_codex.send` が `thread_ref` を無視して毎回新しい席を作る | `test_second_round_reuses_the_same_seat_on_both_relays` |
+| `cli` が Tier1 でも `tier3_paste_required` を記録する (`if relay.tier == 3` → `if True`) | `test_tier1_seats_do_not_add_human_actions` / `test_one_tier1_seat_failure_does_not_drag_the_other_down` |
+
+全 suite **199 → 207 passed** (exit 0)。
+
+### この検証で言えないこと
+
+- **模擬席であって実席ではない**。「Tier1 席では人間の手数が増えない」を担保するのは
+  dispatcher 側の配線 (packet 搬出 → 回収 → journal) までで、実 grok 席が実 packet で
+  同じ経路を通るかは別問題。grok の実往復は spike (2026-08-07 / 5 turn) で確認済みだが、
+  **roundtable の議題を 2 席同時に回す実往復スモークは未実施**。
+- fake は即答するので **timeout 枠の妥当性は一切検証していない** (数値の不変条件は
+  `test_timeouts_have_margin_over_measured_latency` 側で別途固定)。codex 版で
+  「単体テスト green なのに Tier1 が 100% 失敗」を踏んだのと同じ構造の穴は残る。
+- grok 席の `session/request_permission` は、この統合テストの模擬席では発生させていない
+  (単体は `test_v02_relay_grok.py` が担当)。実席では許可要求が入るため、
+  **実往復では手数が増えない保証はまだ無い** (`allow_once` 自動応答経路そのものが未実測)。
+
+## 敵対レビュー (2026-08-07 / grok Tier1 追加後 207 tests green の状態に対して) — HIGH 対応
+
+`roundtable/*.py` 15 本 + `tests/*.py` 19 本 + spike 生ログ (`.pytest-tmp-sp/`) を
+突き合わせたレビュー。HIGH 3 件を修正、MED/LOW は下表に記録のみ。
+**移設 (`_ProcessTree` → `relay_process.ProcessTree`) 自体は docstring 以外同一で
+codex 側の退行はゼロ**という判定はこちらでも確認した (挙動を変えるコードが無い)。
+
+### H1 — 失敗した round で `permission_log` が前 round のまま残る (修正)
+
+`GrokAcpRelay.send` は `seat["permission_log"] = list(self.permission_log)` を
+**`session/prompt` 成功後にしか書いていなかった**。コード自身が「空でも書く / 書かないと
+前ラウンドの記録が残り続ける」と宣言しているのに、失敗パスでその不変条件が丸ごと崩れる。
+
+再現 (fake stdio で「許可を 1 件出した直後に席が落ちる」):
+
+```
+RelayError: session/prompt: grok agent が終了した rc=1
+relay.permission_log  : [{"tool": "execute", "decision": "allow-once", ...}]  ← 実際に出した許可
+seat["permission_log"]: [{"tool": "write",   "decision": "allow-once", ...}]  ← 前 round の記録
+```
+
+破綻は 2 方向ある。(a) round2 で `execute` を許可した直後に落ちて Tier3 縮退すると、
+`save_seats` が round1 の記録を書き戻し、CEO は「tier=3 なのに write を許可した記録がある」
+という現実と無関係な状態を読む。(b) **より重いのは逆向き** — この round で実際に出した許可
+(= 席が PowerShell を走らせた事実) が記録から消える。`_decide_permission` の docstring
+どおり書込境界は OS 強制ではなく記録が唯一の証跡なので、失敗時に消えると監査の意味を失う。
+
+**修正**: `send()` を `try/finally` にし、成否によらず `seat["permission_log"]` を書く。
+turn 未完で抜けた場合は `seat["permission_log_partial"] = True` を立てて
+「全部の許可要求を見たとは言えない」ことを区別する (成功時は pop で消す)。
+
+### H2 — `close()` に本番の呼び出し元が無く、POSIX の孤児回収が到達不能だった (修正)
+
+relay の `close()` を呼ぶ本番コードは **ゼロ**だった (呼んでいたのはテストだけ)。
+Windows は Job Object の `KILL_ON_JOB_CLOSE` により Python 終了時にハンドルが閉じて
+木ごと死ぬので偶然助かっていたが、POSIX は `relay_process.kill_tree` の `killpg` が
+一度も走らず、CLI 終了後に席のプロセス木 (実測 **1 席 10 プロセス**) が孤児として残る。
+`relay_process.py` の docstring が両 OS 等価であるかのように書いていた点も含めて穴だった。
+
+**修正**:
+
+| 変更 | 内容 |
+|---|---|
+| `relay.Relay` | 契約に `close()` を追加 (module docstring に経緯) |
+| `relay_tier3.Tier3Relay` | no-op の `close()` (呼び出し側が `hasattr` で分岐しなくて済む) |
+| `relay.FallbackRelay` | preferred / fallback の **両方**に委譲。`_active` だけでは足りない (プロセスを起こしたのは失敗した preferred の方)。`close` 非装備の相手は素通り |
+| `cli._cmd_dispatch` | `try/finally` で `_close_relay(relay)`。**collect の後**に閉じる (codex の `turn/start` は投げっぱなしなので、前に閉じると実行中の席を殺す) |
+| `cli._close_relay` | 回収の失敗で dispatch の exit code を変えず、stderr には出す (黙って捨てない) |
+
+`--async` は「搬出だけして席を動かしたまま返る」契約なので **閉じない**。
+なお「`--async` + Tier1 は Windows では dispatch プロセス終了時に Job が閉じて席が死ぬ」
+という既知の穴 (上記「残る穴 (v0.3)」) は本修正で変わっていない。relay 側に
+「send が返った時点で turn が完了しているか」を持たせて分岐する案 (レビュー提案) は
+契約変更を伴うので v0.3 の設計課題として保留する。
+
+### H3 — grok 席では改ざん検知が成立しないのに SSOT も runtime も黙っていた (修正)
+
+`.integrity` の検知は「席が証跡に届かない」前提の上に立っている (H4 節)。ところが
+`relay_grok._decide_permission` の docstring が同じ前提を **実測で否定**していた:
+Windows で grok の sandbox は一次 docs の Platform Support 表に載っておらず、実測でも席は
+`run_terminal_command` で PowerShell を任意実行できた。spike 生ログでも裏が取れる
+(`.pytest-tmp-sp/raw-grok-p3-packet.jsonl`: `toolCall.kind: "execute"` で
+`[System.IO.File]::WriteAllText($tmp, ...)` を**絶対パス指定**で実行。cwd は境界として
+機能していない)。にもかかわらず H4 節は「未検証」のままで、CEO が画面から知る手段も無かった。
+
+**修正**:
+
+| 対応 | 内容 |
+|---|---|
+| SSOT | H4 節の冒頭に「codex: 未検証 / **grok: 実測で破れている**」を明記。`paths.TopicPaths.integrity` / `integrity.py` の docstring も席ごとに書き分け |
+| runtime | `cli._warn_if_integrity_detection_does_not_hold` — `tier==1 and participant=="grok"` の dispatch と `status` で必ず印字する。**検知できないなら、検知できないことを検知可能にする** |
+| status | 席ごとの `tier` / `fallback_reason` / 許可件数 (partial マーク付き) を表示するようにした (従来 tier はどこにも出ていなかった) |
+
+**未対応 (設計判断 / CEO 確認事項)**: 許可の記録を `seats.json` (= 監査対象が書き換えられる
+場所) から repo 外の append-only ログへ逃がす案は H4-2 として保留。監査記録を監査対象の
+書込範囲に置いている構図自体は残っている。
+
+### 検証
+
+- 追加テスト 7 本 (`test_v02_relay_grok.py` 3 / `test_v02_two_seat_tier1_mock.py` 4)。
+- **テストが本当にバグを捕まえる証拠** (実装を壊して落ちることを実測):
+
+  | 変異 | 落ちたテスト |
+  |---|---|
+  | `send()` の `finally` を消す (失敗時に `permission_log` を書かない) | `test_permission_log_is_written_even_when_the_turn_fails` |
+  | `_cmd_dispatch` が `_close_relay` を呼ばない | `test_dispatch_closes_the_seat_process_after_collect` |
+  | grok 席の警告を出さない | `test_grok_tier1_dispatch_says_integrity_detection_does_not_hold` / `test_status_surfaces_the_seat_tier_and_the_grok_warning` |
+
+- 全 suite **207 → 214 passed** (exit 0 / 46.6s)。
+
+## 同レビューの MED / LOW (記録のみ / 未対応)
+
+| # | severity | 内容 | 状態 |
+|---|---|---|---|
+| M1 | MED | packet の tmp→rename 契約が、席を唯一の境界破り手段である `execute` に追い込んでいる。spike 対照実験: 素の書き込みのみ (p1) は許可要求 **0 件** / 実 packet (p3・run1) は **1-3 件すべて `execute` の PowerShell**。rename ツールが無いのでシェルに逃げており、H3 の境界破りと軸 A の手数増の唯一の発生源になっている | **hold**。案 (a) Tier1 席には `.json` 直書きを許し原子性を dispatcher 側 (`watcher._read_stable` + parse + id 照合 + schema) に寄せる / 案 (b) `clientCapabilities.fs` を実装して `fs/write_text_file` を client で受ける。どちらも要 spike。当面は「rename 要求が permission prompt を生む」を既知コストとして本行で記録する |
+| M2 | MED | `AUTO_ALLOW_KINDS` の既定 `("allow_once",)` は実測 4 回すべてで一度も選ばれていない (spike client は `("allow_always","allow_once")` で走り、`permission_grants` は全部 `always-allow`)。「未実測の経路を既定にし、実測済みの経路を既定から外した」形。なお run1 は `always-allow` を選んでも **3 回聞かれている** = `allow_always` は session 内ですら永続していない (「承認が席を跨いで残る」懸念は spike の範囲では未観測) | **hold**。`allow_once` で 1 turn の実往復 spike を回して `docs/spike-results-v0.2.md` に追記する。それまで grok Tier1 は既定にせず `--tier 1 --participant grok` の明示操作に留める |
+| M3 | MED | 共通化の切り出し面が違う。`ProcessTree` は codex/grok 完全同一だったので共有は正しいが、**分岐しているのは transport 層**で重複が残る: (a) codex は `stderr=PIPE` を誰も読まない (Win 64KB で埋まると app-server がブロック → `turn/start` が 120s 満了して毎回 Tier3 縮退) (b) codex の deadline が `time.time()` (壁時計 / NTP 補正で枠が伸縮) (c) codex は `queue.Empty` 時に `proc.poll()` を見ないのでプロセス死亡後も 300s 待ち切る | **hold**。少なくとも stderr drain は codex へ backport すべき。ACP 統一時に `_read_loop` / `_rpc` / `_send_raw` / `close` を `relay_acp.py` へ上げる案 |
+| M4 | MED | `thread_ref` に修復経路がない。`session not found` で `_load_session` が落ちると恒久 Tier3 になり、`merge_seats` がディスク側から復元するため **relay 側から席 id を消せない**。grok は session ストアが cwd スコープで TUI からも掃除されうるので codex より踏みやすい | **hold**。`seat["thread_ref_retired"] = <old id>` のような明示的無効化を `merge_seats` に通す案。retire は journal に human-readable な 1 行として残す |
+| M5 | MED | 縮退の瞬間に席が分裂する。`_new_session` が `thread_ref` を書いた **後**に prompt が timeout すると、CEO は Tier3 で別チャットに貼り、`thread_ref` が指す ACP session はその round の packet を見ていない。次 round は空の session を `session/load` する | **hold**。`seat["thread_ref_desync_round"]` を立てて `status` で提示する案 + 既に `<inv>.json` / `.tmp` があるなら Tier3 貼り付けを促さない (二重送信抑制) |
+| M6 | MED | `tests/test_v02_two_seat_tier1_mock.py` は「**実 CLI は起動しない**」と宣言しているのに、`test_relay_wiring_picks_one_transport_per_participant` だけ `bench` fixture を取らず本物の `CodexAppServerRelay` を構築する → `resolve_codex_binary()` が PATH 上の全 codex 候補に `--version` を exec (実測 2 候補 × 約 1s / `_probe_version` の timeout は 30s なので最悪 60s ブロック)。また `.github/` が無く **CI が存在しない**ので、この suite は CEO の Windows 機でしか観測されていない | **hold**。当該 test に `bench` を取らせるか `resolve_codex_binary` を monkeypatch し、加えて `conftest.py` の autouse fixture で `_probe_version` を封じて宣言をテストで強制する案 |
+| L1 | LOW | `_ensure()` の再 spawn 時、古い `self._tree` を `close()` せず上書きする (codex/grok 同型)。Windows では leak したハンドルが `KILL_ON_JOB_CLOSE` を止める | **hold**。`old = self._tree; old.close()` の 1 行 |
+| L2 | LOW | `permission_log` のレコード形が 2 種類 (`{tool, method, decision}` と `{tool, decision, kind}`)。seats.json に混在するので機械集計で躓く | **hold** |
+| L3 | LOW | `_handle_request` が `params["sessionId"]` を照合しない。今は 1 プロセス 1 session なので実害なし。`sessionCapabilities.list` を使い始めた瞬間に別席の許可要求へ答える | **hold** |
+| L4 | LOW | `stopReason` を分類しない判断自体は妥当だが、`refusal` / `cancelled` も `delivered` として journal に入り、collect の 900s 後に `failed: timeout` に化ける。`failure_stats` 上「無応答」と区別できない | **hold**。`stopReason != "end_turn"` のとき `_write_last_result` に生値を載せるだけで切り分けが効く |
+| L5 | LOW | `cli` が全席に `seat["thread_name"]` を設定するが、grok は `rename_seat` が `NotImplementedError` なので黙って捨てられる。「設定したのに効かない席がある」ことがどこにも書かれていない | **hold** |

@@ -47,6 +47,10 @@ def _which_codex(binary: str | None = "codex") -> str | None:
     あると **thread/start に永久に応答しない** (2026-08-06 実測)。doctor がその
     バイナリで診断すると、環境が正常でも必ず「Tier1 不可・Tier3 推奨」と誤答する。
     版を見て選ぶ resolve_codex_binary に委譲する。
+
+    候補が全部古い場合は resolve 側が UnsupportedCodexError を上げる。ここでは
+    握り潰さず呼び出し元 (diagnose) に渡し、「見つからない」と「古すぎる」を
+    別の note として出し分ける。
     """
     from .relay_codex import resolve_codex_binary
 
@@ -151,11 +155,24 @@ def run_doctor(
     start_timeout: float = 180.0,
     cwd: str | None = None,
 ) -> DoctorReport:
+    from .relay_codex import UnsupportedCodexError
+
     notes: list[str] = []
-    path = _which_codex(binary)
+    unsupported: UnsupportedCodexError | None = None
+    try:
+        path = _which_codex(binary)
+    except UnsupportedCodexError as exc:
+        # 届かないと分かっている版で 180s 待たない。ここで診断を打ち切る。
+        path, unsupported = None, exc
+        notes.append(f"codex too old: {exc}")
     sock = default_control_socket()
     sock_exists = sock.exists()
-    proxy = _probe_proxy(path, sock) if path else "error:codex not found"
+    if unsupported:
+        proxy = f"error:unsupported codex {'.'.join(str(x) for x in unsupported.version)}"
+    elif path:
+        proxy = _probe_proxy(path, sock)
+    else:
+        proxy = "error:codex not found"
 
     spawn_init = "skipped"
     thread_list = "skipped"
