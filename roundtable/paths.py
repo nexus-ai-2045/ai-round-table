@@ -1,18 +1,20 @@
 """topic ディレクトリ規約の一元管理。
 
-レイアウト (DESIGN v6 §3):
+レイアウト (DESIGN v6 §3 + D12/D13):
     <root>/minutes/<slug>/
-        minutes.md      議事録 (blackboard)
+        minutes.md      議事録 (blackboard) — git が改ざん証跡 (D12)
         journal.json    invocation 状態機械
         scratch/        参加者の隔離出力 (invocation UUID 名の JSON)
         snapshot/       参加者に渡す読み取り用スナップショット
         last-result.json  直近 CLI 結果 (パイプで exit code が消えても機械確認可)
         seats.json      席メタ (tier / thread_ref)
-    <root>/.integrity/<slug>/
-        journal.json.sha256 / seats.json.sha256   状態ファイルの hash 証跡
-        journal.json.lock   / seats.json.lock     read-modify-write の排他ロック
+    <root>/.locks/<slug>/
+        journal.json.lock 等 — read-modify-write の排他ロック (gitignore 対象)
 
-証跡とロックだけ議題ディレクトリの外に出す (詳細は TopicPaths.integrity)。
+旧 `<root>/.integrity/<slug>/` (hash 証跡) は D12 で廃止。証跡は git そのもの:
+dispatcher の書込は ledger.commit で履歴に残り、外部の書込は次操作の
+require_clean が dirty として検知する。lock だけが残るのは、並行 dispatch の
+journal 消失事故 (2026-08-07) の再発防止が改ざん検知とは別問題だから。
 """
 import re
 from dataclasses import dataclass
@@ -37,46 +39,14 @@ class TopicPaths:
     def seats(self) -> Path:
         return self.root / "seats.json"
 
-    @property
-    def integrity(self) -> Path:
-        """状態ファイル / 議事録の hash 証跡・ロックの置き場。**議題ディレクトリの外**。
-
-        minutes.md / journal.json / seats.json は Tier1 の席の書込範囲
-        (sandbox=workspace-write, cwd=議題ディレクトリ) の中にある。証跡を同じ場所に
-        置くと、対象を書き換えられる相手が証跡も書き換えられるので照合が成立しない。
-        そこで `<root>/.integrity/<slug>/` (議題ディレクトリの 2 階層上) へ逃がす。
-
-        **この前提は席ごとに成否が違う** (2026-08-07 / レビュー H4・H3):
-
-        - **codex 席: 未検証**。「席がこの場所に届かない」は `workspace-write` の
-          実効書込範囲が cwd 配下に閉じていることを仮定している。実効範囲を決めるのは
-          サーバ側で、repo 内にも `references/` にも**それを示す一次情報が無い**。
-          `turn/start` の `sandboxPolicy.writableRoots` は追加リストであって上限指定では
-          ない (schema: `writableRoots` の既定は空 + `/tmp` と `$TMPDIR` は専用の除外
-          フラグで別管理) ため、送っても範囲を絞れない。閉じるには実測しかない:
-          席に `../../.integrity/<slug>/probe` への書き込みを 1 回試させ、拒否される
-          ことを spike 記録に残す。
-        - **grok 席: 実測で破れている**。Windows で grok の sandbox は一次 docs の
-          Platform Support 表に載っておらず、実測でも席は `run_terminal_command` で
-          PowerShell を任意実行できた (spike `raw-grok-p3-packet.jsonl`: 絶対パス指定の
-          `[System.IO.File]::WriteAllText`)。cwd は境界として機能していないので、
-          **grok 席が立った議題では本 module の検知は成立しない**。CLI は dispatch /
-          status でその旨を必ず印字する (`cli._warn_if_integrity_detection_does_not_hold`)。
-
-        詳細と手順は docs/review-backlog.md。
-
-        なお path の入れ子関係 (証跡が議題ディレクトリの外にあること) はテストで
-        固定してある。前提が崩れているのは **sandbox の実効範囲** の方である。
-        """
-        return self.root.parent.parent / ".integrity" / self.root.name
-
-    def witness(self, name: str) -> Path:
-        """`name` (journal.json 等) の hash 証跡ファイル。"""
-        return self.integrity / f"{name}.sha256"
-
     def lock(self, name: str) -> Path:
-        """`name` を read-modify-write する間だけ握るロックファイル。"""
-        return self.integrity / f"{name}.lock"
+        """`name` を read-modify-write する間だけ握るロックファイル。
+
+        議題ディレクトリの外 (`<root>/.locks/<slug>/`) に置くのは、topic 配下に
+        置くと git の履歴・status に混ざり、証跡 (D12) にノイズが入るため。
+        lock は排他の道具であって記録ではない。
+        """
+        return self.root.parent.parent / ".locks" / self.root.name / f"{name}.lock"
 
 
 def topic_dir(root: Path, slug: str) -> Path:
@@ -101,12 +71,18 @@ def validate_slug(slug: str) -> str:
 
 
 def ensure_topic(root: Path, slug: str) -> TopicPaths:
+    """topic ディレクトリを用意し、root の git 管理を保証する (D13)。
+
+    git 保証をここに置くのは topic_dir の検証と同じ理由 — 全経路が通る合成点で
+    行わないと、「git 外に議事録が作られて検知 (D12) が静かに消える」経路が残る。
+    """
+    from . import ledger  # 循環 import 回避 (ledger は paths を知らない)
+
     slug = validate_slug(slug)
     d = topic_dir(root, slug)
     scratch = d / "scratch"
     snapshot = d / "snapshot"
     scratch.mkdir(parents=True, exist_ok=True)
     snapshot.mkdir(parents=True, exist_ok=True)
-    tp = TopicPaths(d, d / "minutes.md", d / "journal.json", scratch, snapshot)
-    tp.integrity.mkdir(parents=True, exist_ok=True)
-    return tp
+    ledger.ensure_git_root(root)
+    return TopicPaths(d, d / "minutes.md", d / "journal.json", scratch, snapshot)

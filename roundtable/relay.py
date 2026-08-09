@@ -18,7 +18,7 @@ import json
 from pathlib import Path
 from typing import Protocol
 
-from . import integrity
+from . import ledger
 from .filelock import FileLock
 from .paths import TopicPaths
 
@@ -45,14 +45,13 @@ _SEATS_NAME = "seats.json"
 
 
 def load_seats(tp: TopicPaths) -> dict:
-    """席メタを読む。dispatcher 以外に書き換えられていたら fail-closed (ValueError)。
+    """席メタを読む。dispatcher 以外に書き換えられていたら fail-closed (D12)。
 
-    読みもロック配下で行う (journal._read_verified と同じ理由 / レビュー H1・H2)。
-    `verify_and_read` は証跡を書きうるので、ロック外で呼ぶと writer の pending 窓に
-    割り込んで偽の改ざん検知を作り、Windows では writer の `os.replace` も壊す。
+    読みもロック配下で行う (journal._read_verified と同じ理由): reader が開いて
+    いる間の writer `os.replace` は Windows で WinError 5 になる。
     """
     with FileLock(tp.lock(_SEATS_NAME)):
-        raw = integrity.verify_and_read(tp.seats, tp.witness(_SEATS_NAME))
+        raw = ledger.read_state(tp.seats)
     if raw is None:
         return {}
     return json.loads(raw.decode("utf-8"))
@@ -88,13 +87,14 @@ def save_seats(tp: TopicPaths, data: dict) -> None:
     並行 dispatch では他席のエントリごと消える (2026-08-07 実測: 一方の
     tier=3 + fallback_reason が消滅)。journal.save と同じ方針に揃える。
     """
-    witness = tp.witness(_SEATS_NAME)
     with FileLock(tp.lock(_SEATS_NAME)):
-        raw = integrity.verify_and_read(tp.seats, witness)
+        raw = ledger.read_state(tp.seats)
         disk = json.loads(raw.decode("utf-8")) if raw is not None else {}
         merged = merge_seats(disk, data)
-        integrity.write_verified(
-            tp.seats, json.dumps(merged, ensure_ascii=False, indent=1), witness
+        ledger.write_state(
+            tp.seats,
+            json.dumps(merged, ensure_ascii=False, indent=1),
+            f"minutes({tp.root.name}): seats",
         )
 
 

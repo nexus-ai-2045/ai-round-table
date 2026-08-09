@@ -33,6 +33,9 @@ from roundtable import relay as relay_mod
 from roundtable.cli import main
 from roundtable.paths import ensure_topic
 
+# bench が subprocess.Popen を席 mock に差し替えても、ledger の git は実物を使う
+_REAL_POPEN = subprocess.Popen
+
 # 実測の initialize result (grok 1.0.0) から、capability ゲートが見る部分だけ。
 GROK_CAPABILITIES = {
     "loadSession": True,
@@ -228,6 +231,10 @@ class _Bench:
         return [a for a in self.agents if a.participant == participant]
 
     def popen(self, argv, **kwargs):
+        if argv and argv[0] == "git":
+            # ledger (D12) の git 呼び出しは席の spawn ではない。実物に素通しする。
+            # 席以外で他に許すものは無い — 未知 spawn を落とす検知は維持する。
+            return _REAL_POPEN(argv, **kwargs)
         assert kwargs["encoding"] == "utf-8", "cp932 に戻ると日本語 packet が壊れる"
         assert kwargs.get("shell") is not True
         if "app-server" in argv:
@@ -465,22 +472,25 @@ def test_async_dispatch_keeps_the_seat_running(tmp_path, bench):
         "--async なのに席を閉じている (回収は collect 側の責務)"
 
 
-def test_grok_tier1_dispatch_says_integrity_detection_does_not_hold(tmp_path, bench, capsys):
-    """grok 席では `.integrity` 検知が成立しないことを画面に出す (レビュー H3)。
+def test_grok_tier1_dispatch_has_no_integrity_warning(tmp_path, bench, capsys):
+    """grok 席の「検知不成立」警告は D12 で消えたまま復活しない。
 
-    grok 席は `run_terminal_command` で PowerShell を任意実行でき、証跡の置き場
-    (`<root>/.integrity/`) にも届く (2026-08-07 spike 実測)。検知できないなら、
-    **検知できないことを検知可能にする**。codex 席では出さない (前提は未検証だが
-    破れてはいない)。
+    旧 witness 検知は「席が証跡に届かない」前提で、grok 席が PowerShell を
+    任意実行できる (2026-08-07 spike 実測) ため成立せず、警告を出していた。
+    git 検知 (D12) は席がどこに書けても成立するので、警告が再び出るなら
+    「検知が席の sandbox に依存する設計」への退行を意味する。
     """
     _run_topic(tmp_path, tier=1, rounds=(1,), bench=bench)
     out = capsys.readouterr().out
-    assert out.count("`.integrity` の改ざん検知は成立しない") == 1, \
-        "grok の 1 回だけ出るはず (codex では出さない)"
+    assert "改ざん検知は成立しない" not in out
 
 
-def test_status_surfaces_the_seat_tier_and_the_grok_warning(tmp_path, bench, capsys):
-    """status からも席の tier と grok 席の警告が読める (dispatch を見逃しても分かる)。"""
+def test_status_surfaces_the_seat_tiers(tmp_path, bench, capsys):
+    """status から席の tier が読める (dispatch を見逃しても分かる)。
+
+    grok 警告の assert は D12 (git 一本化) で撤去した — 検知が席の sandbox に
+    依存しなくなったため、警告自体が存在しない。
+    """
     _run_topic(tmp_path, tier=1, rounds=(1,), bench=bench)
     capsys.readouterr()
 
@@ -488,7 +498,7 @@ def test_status_surfaces_the_seat_tier_and_the_grok_warning(tmp_path, bench, cap
     out = capsys.readouterr().out
     assert "rt/t/codex  tier=1" in out
     assert "rt/t/grok  tier=1" in out
-    assert "`.integrity` の改ざん検知は成立しない" in out
+    assert "改ざん検知は成立しない" not in out
 
 
 def test_seat_threads_do_not_leak_between_participants(tmp_path, bench):

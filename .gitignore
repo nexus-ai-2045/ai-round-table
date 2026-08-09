@@ -1,5 +1,4 @@
 .pytest-tmp*/
 __pycache__/
 .pytest_cache/
-minutes/tier1-final/
-.integrity/
+.locks/

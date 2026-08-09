@@ -326,8 +326,10 @@ class GrokAcpRelay:
         **書込境界についての注意**: これは OS サンドボックスではない。Windows では
         grok の sandbox は Platform Support 表に載っておらず (一次 docs)、実測でも席は
         `run_terminal_command` で PowerShell を任意実行できた。つまり許可を出した時点で
-        席は議題ディレクトリの外も書ける。`docs/review-backlog.md` H4 の
-        「`.integrity` 証跡は席の書込範囲外」という前提は、**grok 席については成り立たない**。
+        席は議題ディレクトリの外も書ける。改ざん検知がこの事実に耐えるのは D12
+        (git 一本化) 以降: 席がどこに書いても、dispatcher 所有ファイルへの書込は
+        次操作の clean 検査で dirty として出る (ローカル git 履歴ごと書き換える相手への
+        最終証跡は origin へ push した履歴)。
         許可ポリシーの設計 (execute を拒否するか / rawInput を検査するか) は未決で、
         ここでは「狭い方を選び、全件記録する」までに留める。
         """

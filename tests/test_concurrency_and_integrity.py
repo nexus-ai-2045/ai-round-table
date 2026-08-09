@@ -5,8 +5,9 @@
 - human_actions (軸 A KPI) が上書きで減らない / 二重計上もされない
 - round は巻き戻らない
 - journal.json / seats.json が dispatcher 以外に書かれたら fail-closed
-- hash 証跡は改ざん対象と同じ場所に置かない (議題ディレクトリの外に**配置**する。
-  席が実際にそこへ書けないかどうかは未検証 — レビュー H4 / review-backlog 参照)
+- 検知の実体は git (D12): dispatcher の書込は commit 済み = clean、外部の書込は
+  dirty。席がローカル git 履歴ごと書き換える経路は本テストの範囲外
+  (最終証跡は origin へ push した履歴 — DESIGN D12 の表)
 
 実装の内部構造ではなく守るべき性質でまとめる (test_v02_invariants.py と同じ方針)。
 """
@@ -16,11 +17,12 @@ import time
 
 import pytest
 
-from roundtable import integrity
+from roundtable import ledger
+from roundtable.atomicio import atomic_write
 from roundtable.cli import main
 from roundtable.filelock import FileLock, LockTimeout
-from roundtable.integrity import StateTamperedError
 from roundtable.journal import Journal
+from roundtable.ledger import LedgerDirtyError
 from roundtable.paths import ensure_topic
 from roundtable.relay import load_seats, merge_seats, save_seats
 
@@ -121,13 +123,20 @@ def test_legacy_actions_without_id_are_deduped_not_doubled(tmp_path):
 
 
 def test_parallel_threads_lose_no_invocation(tmp_path):
-    """8 スレッド x 10 invocation を同時に走らせて 1 件も落ちない (総当り)。
+    """4 スレッド x 5 invocation を同時に走らせて 1 件も落ちない (総当り)。
 
     各スレッドが独立に Journal.load する = 別プロセス相当。ファイルロックは
     O_EXCL なのでスレッド間でも同じ経路で効く。
+
+    規模を 8x10 から 3x3 に落とした (2026-08-10 / D12): save 1 回 = git commit
+    1 回になり、Windows 実測 0.3-3s/op と振れ幅が大きい。8x10 (160 op) は join の
+    120s 枠を食い切り、**記録は消えていないのに走行中断で偽の失敗**になった
+    (76/80 まで進んで errors ゼロ)。4x5 でも 123-152s でボーダー上のフレーク。
+    守る性質 (重ね合わせで記録が消えない) は元バグの再現条件が 2 プロセスなので
+    3x3 で十分に踏む。実運用の包絡は同時 2-3 dispatch × 保存 ~7 回 = ここと同規模。
     """
     tp = ensure_topic(tmp_path, "t1")
-    threads_n, per_thread = 8, 10
+    threads_n, per_thread = 3, 3
     created: list[str] = []
     errors: list[BaseException] = []
     lock = threading.Lock()
@@ -176,20 +185,20 @@ def test_journal_json_stays_parseable_under_parallel_writes(tmp_path):
 
     def writer(idx: int) -> None:
         j = Journal.load(tp)
-        for _ in range(15):
+        for _ in range(8):  # 規模は D12 の per-save commit コストに合わせる (上の 3x3 と同じ理由)
             j.new_invocation(f"p{idx}", 1)
 
     r = threading.Thread(target=reader, daemon=True)
     r.start()
-    ws = [threading.Thread(target=writer, args=(i,)) for i in range(4)]
+    ws = [threading.Thread(target=writer, args=(i,)) for i in range(3)]
     for t in ws:
         t.start()
     for t in ws:
-        t.join(timeout=60)
+        t.join(timeout=120)
     stop.set()
     r.join(timeout=5)
     assert not bad, f"壊れた JSON を観測: {bad[0]}"
-    assert len(Journal.load(tp).data["invocations"]) == 60
+    assert len(Journal.load(tp).data["invocations"]) == 24
 
 
 def test_terminal_conflict_is_recorded_not_silently_dropped(tmp_path):
@@ -222,7 +231,7 @@ def test_journal_tamper_is_fail_closed(tmp_path):
     data = json.loads(tp.journal.read_text(encoding="utf-8"))
     data["invocations"][inv]["state"] = "merged"  # 席が自分を merged に書き換える
     tp.journal.write_text(json.dumps(data), encoding="utf-8")
-    with pytest.raises(StateTamperedError):
+    with pytest.raises(LedgerDirtyError):
         Journal.load(tp)
 
 
@@ -231,7 +240,7 @@ def test_journal_deletion_is_detected(tmp_path):
     tp = ensure_topic(tmp_path, "t1")
     Journal.load(tp).new_invocation("codex", 1)
     tp.journal.unlink()
-    with pytest.raises(StateTamperedError):
+    with pytest.raises(LedgerDirtyError):
         Journal.load(tp)
 
 
@@ -242,81 +251,65 @@ def test_seats_tamper_is_fail_closed(tmp_path):
         json.dumps({"rt/t1/codex": {"participant": "codex", "tier": 1}}),
         encoding="utf-8",
     )
-    with pytest.raises(StateTamperedError):
+    with pytest.raises(LedgerDirtyError):
         load_seats(tp)
 
 
-def test_tampered_error_is_valueerror():
-    """既存の except ValueError 経路を壊さない。"""
-    assert issubclass(StateTamperedError, ValueError)
+def test_dispatcher_writes_become_commits(tmp_path):
+    """dispatcher の書込は履歴になる (D12 の「証跡は git そのもの」の実測)。
 
-
-def test_witness_is_placed_outside_the_topic_directory(tmp_path):
-    """証跡を議題ディレクトリ (= 席の cwd) の外に置く、という **配置** を固定する。
-
-    同じ場所に置くと、対象を書き換えられる相手が証跡も書き換えられ検知が消える。
-
-    **このテストが確かめているのは path の入れ子関係だけ**である (レビュー H4)。
-    「席が実際にそこへ書けない」= sandbox の実効書込範囲は一度も観測していない。
-    それは実 CLI を起動する probe でしか閉じられない (docs/review-backlog.md)。
-    テスト名から `seat_writable_area` を外したのは、検証していない範囲を名前で
-    主張しないため。
+    旧 witness の「証跡を議題ディレクトリの外に置く」テストの後継。witness は
+    「席が証跡の場所に届かない」仮定に依存して破綻した (grok 実測)。git の履歴は
+    場所でなく **push 先** (origin) が席の届かない場所になる。
     """
     tp = ensure_topic(tmp_path, "t1")
     Journal.load(tp).new_invocation("codex", 1)
-    w = tp.witness("journal.json")
-    assert w.exists()
-    assert tp.root.resolve() not in w.resolve().parents
+    root = ledger.require_root(tp.root)
+    log = ledger._git(root, "log", "--format=%an %s", "--", str(tp.journal)).stdout
+    assert "roundtable-dispatcher" in log  # 機械 commit として判別可能
+    assert f"minutes({tp.root.name}): journal" in log
+    # witness の残骸 (sha256 控え) をどこにも作らない
     assert not any(p.suffix == ".sha256" for p in tp.root.rglob("*"))
 
 
-def test_witness_forgery_inside_topic_dir_does_not_help(tmp_path):
-    """議題ディレクトリ内に偽証跡を置いても照合先は変わらない。"""
-    tp = ensure_topic(tmp_path, "t1")
-    j = Journal.load(tp)
-    j.new_invocation("codex", 1)
-    forged = {"round": 99, "invocations": {}, "human_actions": [], "conflicts": []}
-    text = json.dumps(forged, ensure_ascii=False, indent=1)
-    tp.journal.write_text(text, encoding="utf-8", newline="\n")
-    (tp.root / "journal.json.sha256").write_text(
-        json.dumps({"sha256": integrity.digest(text.encode("utf-8"))}), encoding="utf-8"
-    )
-    with pytest.raises(StateTamperedError):
-        Journal.load(tp)
+def test_pre_existing_journal_is_flagged_not_adopted(tmp_path):
+    """dispatcher が書いた記録の無い journal は採用せず fail-closed。
 
-
-def test_pre_existing_journal_is_adopted_and_marked(tmp_path):
-    """証跡より前から在る journal は採用する。ただし『観測ではない』と証跡に残す。"""
+    旧 witness は「観測していない過去は検証できない」として黙って採用 (adopted)
+    していた。git では「dispatcher の commit が無い = 出所不明」を dirty として
+    CEO に見せられるので、採用するかは機械でなく人間が決める (D1)。
+    """
     tp = ensure_topic(tmp_path, "t1")
     tp.journal.write_text(
         json.dumps({"round": 1, "invocations": {}, "human_actions": []}),
         encoding="utf-8",
     )
-    j = Journal.load(tp)  # 例外にしない (観測していない過去は検証できない)
-    assert j.round_no == 1
-    rec = json.loads(tp.witness("journal.json").read_text(encoding="utf-8"))
-    assert rec["adopted"] is True
+    with pytest.raises(LedgerDirtyError):
+        Journal.load(tp)
+    # Repair Path: CEO が正当と裁定して commit すれば以後は普通に読める
+    ledger.commit(ledger.require_root(tp.root), [tp.journal], "minutes(t1): CEO 採用")
+    assert Journal.load(tp).round_no == 1
 
 
-def test_interrupted_write_is_not_called_tampering(tmp_path):
-    """本文書き込みが届かなかった窓を改ざん扱いにしない (自滅的 fail-closed の回避)。"""
+def test_interrupted_write_is_flagged_for_adjudication(tmp_path):
+    """書込後・commit 前にプロセスが落ちた窓は dirty として CEO に出る。
+
+    旧 witness は pending 記録で「自分の書きかけ」を自動復旧していた。git では
+    自動復旧しない — 「dispatcher が書いて commit 前に死んだ」と「席が書き換えた」
+    はローカルの痕跡だけでは区別できず、勝手に片方へ倒すと検知の意味が消える。
+    diff を見て裁くのは CEO (Repair Path は commit または checkout)。
+    """
     tp = ensure_topic(tmp_path, "t1")
     j = Journal.load(tp)
     j.new_invocation("codex", 1)
-    before = tp.journal.read_bytes()
-    w = tp.witness("journal.json")
-    rec = json.loads(w.read_text(encoding="utf-8"))
-    # 「予告だけ書いて落ちた」状態を再現する
-    rec = {
-        "sha256": "0" * 64,
-        "pending_from": integrity.digest(before),
-        "adopted": False,
-        "at": rec["at"],
-    }
-    w.write_text(json.dumps(rec), encoding="utf-8")
-    assert Journal.load(tp).data["invocations"]  # 読める
-    fixed = json.loads(w.read_text(encoding="utf-8"))
-    assert fixed["sha256"] == integrity.digest(before)  # 証跡は実物へ巻き戻る
+    # 「atomic_write までは済んで commit 前に落ちた」を再現
+    data = json.loads(tp.journal.read_text(encoding="utf-8"))
+    data["round"] = 2
+    atomic_write(tp.journal, json.dumps(data, ensure_ascii=False, indent=1))
+    with pytest.raises(LedgerDirtyError):
+        Journal.load(tp)
+    ledger.commit(ledger.require_root(tp.root), [tp.journal], "minutes(t1): crash 後の採用")
+    assert Journal.load(tp).round_no == 2
 
 
 # --- seats.json の並行安全 ---

@@ -1,11 +1,10 @@
 """tmp → os.replace の atomic 書き込み 1 本だけを持つ最下層 module。
 
-**なぜ minutes.py から切り出したか** (2026-08-07 / レビュー H3): minutes.md を
-journal.json と同じ hash 証跡 (integrity.py) で守るには minutes → integrity の
-依存が要る。ところが integrity は atomic 書き込みのために minutes を import して
-いたので循環になる。両者が共通で必要とするのは atomic_write 1 本だけなので、
-それを最下層へ落とす。`minutes.atomic_write` は re-export で残してある
-(既存の呼び出し側 API を壊さない)。
+もとは witness 層 (旧 integrity.py) との import 循環を切るために minutes.py から
+切り出した (2026-08-07 / レビュー H3)。witness 層は D12 で git に置き換えられて
+消えたが、最下層に atomic_write を置く構造は ledger.write_state / minutes /
+snapshot が共有しており、そのまま残す。`minutes.atomic_write` は re-export で
+残してある (既存の呼び出し側 API を壊さない)。
 """
 from __future__ import annotations
 
@@ -33,9 +32,9 @@ _REPLACE_BACKOFF_MAX_S = 0.5
 def atomic_write(path: Path, text: str) -> None:
     """tmp に書いて os.replace。PermissionError は backoff 付きで再試行する。
 
-    改行は `newline="\\n"` 固定 = 無変換。hash 証跡 (integrity) は
-    `text.encode("utf-8")` の digest を記録するので、ここで改行変換が入ると
-    書いた本人の hash が合わなくなる。
+    改行は `newline="\\n"` 固定 = 無変換。改行変換が入ると「書いた内容」と
+    「ディスクの内容」がズレて、git の clean 検査 (D12) が書いた本人の直後に
+    dirty を報告する偽陽性になる (旧 witness 時代の hash 不一致と同型)。
     """
     fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
     try:

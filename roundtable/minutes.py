@@ -4,35 +4,23 @@
 Windows の一時ロック (エディタ/AV の共有違反) に備えて短い retry を持つ。
 merge は hash 照合 fail-closed + escape による予約見出し防御を担う (DESIGN v6 D6/D7)。
 
-**保護の単位を snapshot hash から証跡 + ロックへ移した** (2026-08-07 / レビュー H3):
+**保護の単位の変遷** (詳細は git 履歴と DESIGN D12):
 
-旧実装は `merge_opinion(..., base_hash)` に *dispatch 開始時の snapshot hash* を渡し、
-merge 直前の minutes.md がそれと一致しなければ `MinutesTamperedError` にしていた。
-これは並行 dispatch で必ず壊れる: 先に merge した席が minutes.md を伸ばすので、
-後続席の base_hash は**正常な運用でも**必ず古くなる。実測 (repro.py R2) では
-2 席目が毎回 `failed: tampered` になり、正しく書かれた意見が捨てられていた。
-しかも分類が `tampered` = セキュリティ警報なので、正常な並行追記のたびに警報が出て
-**本物の改ざんを無視する訓練**になる。fail-closed の意味が消える。
-
-そこで journal.json / seats.json と同じ機構に揃えた:
-
-- minutes.md にも `<root>/.integrity/<slug>/minutes.md.sha256` の証跡を持たせる。
-- dispatcher の書き込みはすべて `integrity.write_verified` を通り、証跡を更新する。
-- 読み書きは `FileLock(<...>/minutes.md.lock)` 配下で行い、その場で読み直してから
-  追記する。他 dispatcher の正当な追記は証跡と一致するので tamper にならず、
-  dispatcher 以外の書き換えだけが検知される。
-
-「その場で読み直した hash で照合したら常に一致して無意味では」という指摘 (内部レビュー #2)
-は、照合先が *自分が今読んだ値* だった旧設計への指摘である。ここでの照合先は
-**別ファイルに記録された、dispatcher の書き込みでしか更新されない証跡**なので、
-席が minutes.md を書き換えれば時点によらず検知できる。むしろ「snapshot 採取から
-merge までの窓」に限定されていた旧方式より検知範囲は広い。
+1. snapshot hash (`base_hash` 引数) — 並行 dispatch で 2 席目が必ず
+   `failed: tampered` になる欠陥 (2026-08-07 実測)。正常運用が警報を出し続け、
+   本物の改ざんを無視する訓練になっていた。
+2. witness 証跡 (`.integrity/<slug>/*.sha256`) — 「席は証跡に届かない」前提が
+   grok 席で実測破綻 (PowerShell 任意実行)。届く相手には照合が成立しない。
+3. **git (現行, D12)** — dispatcher の書込は commit で履歴になり、外部の書込は
+   次操作の clean 検査で dirty として検知される。検知の実体は `roundtable.ledger`。
+   他 dispatcher の正当な追記は commit 済みなので clean のまま = 警報を出さない
+   (1 の欠陥を再発させない)。裁くのは CEO が読む `git diff` (人間判断がメイン)。
 """
 import hashlib
 import re
 from pathlib import Path
 
-from . import integrity
+from . import ledger
 from .atomicio import atomic_write
 from .filelock import FileLock
 from .paths import TopicPaths
@@ -68,10 +56,10 @@ verdict:
 """
 
 
-class MinutesTamperedError(integrity.StateTamperedError):
-    """minutes.md が dispatcher 外で変更された (証跡と不一致)。fail-closed の根拠。
+class MinutesTamperedError(ledger.LedgerDirtyError):
+    """minutes.md が dispatcher 外で変更された (working tree が dirty)。fail-closed の根拠。
 
-    `StateTamperedError` を継承する: merge 経路は watcher が個別に捕まえて
+    `LedgerDirtyError` を継承する: merge 経路は watcher が個別に捕まえて
     `failed: tampered` に分類するが、`sync_round` / `write_verdict` /
     `set_background` のような CLI 直呼び経路では CLI の改ざんハンドラ (exit 3) に
     落ちてほしい。継承していないと、これらの経路だけ CEO に traceback が出る。
@@ -81,35 +69,35 @@ class MinutesTamperedError(integrity.StateTamperedError):
 def _lock(tp: TopicPaths) -> FileLock:
     """minutes.md の read-modify-write を不可分にするロック。
 
-    証跡と同じく議題ディレクトリの外 (`<root>/.integrity/<slug>/`) に置く。
+    議題ディレクトリの外 (`<root>/.locks/<slug>/`) に置く (paths.TopicPaths.lock)。
     保持は読み直し〜追記の数ミリ秒だけで、席のターン (最大 900 秒) は握らない。
     """
     return FileLock(tp.lock(_MINUTES_NAME))
 
 
 def _read_verified(tp: TopicPaths) -> str:
-    """証跡と照合してから本文を返す (ロック配下で呼ぶこと)。"""
+    """clean 検査してから本文を返す (ロック配下で呼ぶこと)。"""
     try:
-        raw = integrity.verify_and_read(tp.minutes, tp.witness(_MINUTES_NAME))
-    except integrity.StateTamperedError as exc:
+        raw = ledger.read_state(tp.minutes)
+    except ledger.LedgerDirtyError as exc:
         # 呼び出し側の分類 (watcher の failed:tampered) を維持するため型を寄せる
         raise MinutesTamperedError(str(exc)) from exc
     if raw is None:
-        # 「一度も作られていない」窓。消去された場合は verify_and_read が
-        # StateTamperedError にするので、ここに来るのは new-topic 前の議題だけ。
-        # 改ざん扱いにすると `dispatch` の打ち間違いが exit 3 (改ざん検知) になる。
+        # 「一度も作られていない」= new-topic 前の議題。改ざん扱いにすると
+        # `dispatch` の打ち間違いが exit 3 (改ざん検知) になる。
+        # (commit 済み minutes.md の消去は read_state が dirty として検知する)
         raise FileNotFoundError(f"minutes.md が無い: {tp.minutes}")
     return raw.decode("utf-8")
 
 
-def _write_verified(tp: TopicPaths, text: str) -> None:
-    """本文を atomic に書き、証跡を更新する (ロック配下で呼ぶこと)。
+def _write_verified(tp: TopicPaths, text: str, op: str) -> None:
+    """本文を atomic に書き、commit する (ロック配下で呼ぶこと)。
 
     dispatcher の minutes.md 書き込みは **必ずここを通す**。1 経路でも素の
-    atomic_write が残ると、そこを通った直後に証跡が古いまま残り、次の merge が
-    「誰も改ざんしていないのに tampered」になる (偽陽性の自己生成)。
+    atomic_write が残ると、そこを通った書込が commit されず、次操作の clean 検査で
+    「誰も改ざんしていないのに dirty」になる (偽陽性の自己生成)。
     """
-    integrity.write_verified(tp.minutes, text, tp.witness(_MINUTES_NAME))
+    ledger.write_state(tp.minutes, text, f"minutes({tp.root.name}): {op}")
 
 
 def create(tp: TopicPaths, topic: str, participants: list[str], background: str = "") -> None:
@@ -117,7 +105,7 @@ def create(tp: TopicPaths, topic: str, participants: list[str], background: str 
     if background:
         body = body.rstrip() + "\n" + background.rstrip() + "\n"
     with _lock(tp):
-        _write_verified(tp, body)
+        _write_verified(tp, body, "create")
 
 
 def set_background(tp: TopicPaths, background: str) -> None:
@@ -135,7 +123,7 @@ def set_background(tp: TopicPaths, background: str) -> None:
             new_text = head + marker + "\n" + background.rstrip() + "\n\n" + rest_after
         else:
             new_text = head + marker + "\n" + background.rstrip() + "\n"
-        _write_verified(tp, new_text)
+        _write_verified(tp, new_text, "set-background")
 
 
 def sha256(path: Path) -> str:
@@ -223,7 +211,11 @@ def merge_opinion(tp: TopicPaths, opinion: dict, round_no: int) -> None:
                 f"| {_escape_cell(c['claim'])} | {c['evidence_type']} | "
                 f"{_escape_cell(c['evidence'])} |"
             )
-        _write_verified(tp, text + "\n".join(s for s in section if s is not None) + "\n")
+        _write_verified(
+            tp,
+            text + "\n".join(s for s in section if s is not None) + "\n",
+            f"merge round {round_no} {opinion['participant']}",
+        )
 
 
 def write_verdict(tp: TopicPaths, verdict: str) -> None:
@@ -232,7 +224,7 @@ def write_verdict(tp: TopicPaths, verdict: str) -> None:
         text = _read_verified(tp)
         text = text.replace("status: open", "status: closed", 1)
         text = text.replace("verdict:", f"verdict: {verdict}", 1)
-        _write_verified(tp, text)
+        _write_verified(tp, text, "verdict")
 
 
 def sync_round(tp: TopicPaths, round_no: int) -> None:
@@ -242,4 +234,5 @@ def sync_round(tp: TopicPaths, round_no: int) -> None:
         _write_verified(
             tp,
             re.sub(r"^round: \d+$", f"round: {round_no}", text, count=1, flags=re.MULTILINE),
+            f"sync round {round_no}",
         )

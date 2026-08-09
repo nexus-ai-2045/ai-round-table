@@ -14,7 +14,7 @@ import uuid
 from collections import Counter
 from datetime import datetime, timezone
 
-from . import integrity
+from . import ledger
 from .filelock import FileLock
 from .paths import TopicPaths
 
@@ -29,23 +29,16 @@ _JOURNAL_NAME = "journal.json"
 
 
 def _read_verified(tp: TopicPaths) -> bytes | None:
-    """ロックを取ってから証跡照合 + 本文読取を行う (読みもロック配下、レビュー H1/H2)。
+    """ロックを取ってから clean 検査 + 本文読取を行う (読みもロック配下、レビュー H1/H2)。
 
-    `integrity.verify_and_read` は純粋な読み取りではない (pending の巻き戻しと
-    baseline 採用で証跡を書く)。ロック外の reader がこれをやると:
-
-    - writer の「予告 → 本文 → 確定」の隙間に割り込んで証跡を巻き戻し、その書き込みが
-      writer の確定より後に着地する → 誰も改ざんしていないのに恒久的な
-      `StateTamperedError`。fail-closed なので議題が二度と開けない。
-    - reader が journal.json / 証跡を開いている間、writer の `os.replace` が Windows で
-      WinError 5 になり dispatch ごと落ちる (repro3 で実測: writer 4 / reader 4)。
-
-    ロック配下に寄せると pending 窓は reader から観測不能になり、対象ファイルを
-    同時に開く経路も消えるので、両方が同じ 1 手で閉じる。保持時間は読み取りの
-    数ミリ秒だけで、dispatch の 900 秒を握るわけではない。
+    D12 (git 一本化) 後も読みをロック配下に置く理由は 1 つ残る: reader が
+    journal.json を開いている間、writer の `os.replace` が Windows で WinError 5 に
+    なり dispatch ごと落ちる (repro3 で実測: writer 4 / reader 4)。
+    旧 witness 時代の「証跡巻き戻しが偽の改ざん検知を作る」問題は、読取が純粋に
+    なったので構造ごと消えている (ledger.read_state docstring)。
     """
     with FileLock(tp.lock(_JOURNAL_NAME)):
-        return integrity.verify_and_read(tp.journal, tp.witness(_JOURNAL_NAME))
+        return ledger.read_state(tp.journal)
 
 
 def _entry_id(entry) -> str | None:
@@ -300,20 +293,22 @@ class Journal:
         する」ためだけで、失われた更新を防ぐ本体は重ね合わせ側にある。
 
         読み取り (`load` / `refresh`) も同じロックを取る (`_read_verified`)。
-        証跡の巻き戻しが writer と競合して偽の改ざん検知を作るのと、reader が
-        開いている間の `os.replace` が Windows で失敗するのを同時に防ぐ。
+        reader が開いている間の `os.replace` が Windows で失敗するのを防ぐ。
+
+        改ざん検知は git (D12): 書込前の `ledger.read_state` が clean を検査し、
+        書込後の `ledger.write_state` が commit する。dispatcher 以外の書込は
+        次操作で diff 付きの fail-closed になる。
         """
-        witness = self.tp.witness(_JOURNAL_NAME)
         with FileLock(self.tp.lock(_JOURNAL_NAME)):
-            raw = integrity.verify_and_read(self.tp.journal, witness)
+            raw = ledger.read_state(self.tp.journal)
             merged = (
                 self.data
                 if raw is None
                 else _merge_data(json.loads(raw.decode("utf-8")), self.data)
             )
-            integrity.write_verified(
+            ledger.write_state(
                 self.tp.journal,
                 json.dumps(merged, ensure_ascii=False, indent=1),
-                witness,
+                f"minutes({self.tp.root.name}): journal",
             )
             self.data = merged

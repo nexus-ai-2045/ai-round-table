@@ -12,8 +12,8 @@ from pathlib import Path
 
 from . import minutes, packet, watcher
 from .filelock import LockTimeout
-from .integrity import StateTamperedError
 from .journal import Journal
+from .ledger import LedgerDirtyError
 from .paths import ensure_topic
 from .relay import get_relay, load_seats, save_seats
 
@@ -84,23 +84,11 @@ def _close_relay(relay) -> None:
         print(f"[warn] 席プロセスの回収に失敗した: {exc}", file=sys.stderr)
 
 
-def _warn_if_integrity_detection_does_not_hold(participant: str, tier: int) -> None:
-    """検知できない席では「検知できないこと」を必ず画面に出す。
-
-    `.integrity` の改ざん検知は「席が証跡に届かない」前提の上に立っている
-    (`paths.TopicPaths.integrity`)。grok 席ではこの前提が **実測で破れている**:
-    Windows で grok の sandbox は一次 docs の Platform Support 表に載っておらず、
-    実測でも席は `run_terminal_command` で PowerShell を任意実行できた
-    (spike `raw-grok-p3-packet.jsonl` / 絶対パス指定の `[System.IO.File]::WriteAllText`)。
-    黙っていると CEO は「grok 席が立った瞬間に改ざん検知が無効化された」ことを
-    知る手段が無い (2026-08-07 レビュー H3)。
-    """
-    if tier == 1 and participant == "grok":
-        print(
-            "[warn] grok 席 (tier=1) では `.integrity` の改ざん検知は成立しない: "
-            "席は PowerShell を任意実行でき、証跡の置き場 (<root>/.integrity/) にも届く "
-            "(2026-08-07 実測)。journal / seats / minutes の照合結果を無条件に信用しないこと。"
-        )
+    # 旧 _warn_if_integrity_detection_does_not_hold は D12 で削除した。
+    # grok 席が sandbox 外に書ける事実 (2026-08-07 実測) は変わらないが、検知が
+    # git になったことで「証跡ごと書き換えられて照合が無意味になる」前提が消えた。
+    # 席がローカル git 履歴ごと書き換える可能性は残る — 最終証跡は origin へ push
+    # した履歴 (D12 の表)。
 
 
 def _cmd_dispatch(args) -> int:
@@ -164,7 +152,6 @@ def _cmd_dispatch(args) -> int:
                 print(f"\n[tier1] packet を席へ送った (tier={relay.tier}, label={relay_label})。")
             if "fallback" in str(relay_label):
                 print(f"[fallback] Tier1 失敗のため Tier3 に縮退: {relay_label}")
-            _warn_if_integrity_detection_does_not_hold(args.participant, relay.tier)
 
         if args.async_dispatch:
             _write_last_result(
@@ -284,8 +271,6 @@ def _cmd_status(args) -> int:
                 f"  {c.get('invocation')}  kept={c.get('kept', {}).get('state')}  "
                 f"dropped={c.get('dropped', {}).get('state')}  at={c.get('at')}"
             )
-    # 席の tier を出す。tier だけ見えても仕方ないが、tier=1 の grok 席は
-    # `.integrity` の検知が成立しない席なので、そこを CEO に必ず見せる (レビュー H3)。
     seats = load_seats(tp)
     if seats:
         print("seats:")
@@ -300,7 +285,6 @@ def _cmd_status(args) -> int:
                 if seat.get("permission_log_partial"):
                     line += " (turn 未完 — 全件とは限らない)"
             print(line)
-            _warn_if_integrity_detection_does_not_hold(seat.get("participant", ""), tier)
 
     invocations = journal.data["invocations"]
     if not invocations:
@@ -426,11 +410,12 @@ def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     try:
         return args.func(args)
-    except StateTamperedError as exc:
+    except LedgerDirtyError as exc:
         # fail-closed: 状態ファイル (journal / seats) や議事録が dispatcher 以外に
         # 書かれていたら、その先の記録は信用できない。握り潰さず CEO に提示して止める。
         # minutes.MinutesTamperedError もこの型なのでここに来る (exit 3)。
-        print(f"\n[tampered] 改ざんを検知した\n{exc}", file=sys.stderr)
+        # 裁定材料 (どのファイルがどう変わったか) は例外メッセージの diff にある (D12)。
+        print(f"\n[tampered] 改ざん (dispatcher 以外の書込) を検知した\n{exc}", file=sys.stderr)
         return 3
     except LockTimeout as exc:
         # ロックを取れないまま書くと重ね合わせが不可分でなくなる (filelock の呼び出し規約:

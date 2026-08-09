@@ -93,8 +93,8 @@ def collect(
     渡す方式はやめた** (レビュー H3): 並行 dispatch では先に merge した席が
     minutes.md を伸ばすので、後続席の base_hash は正常運用でも必ず古くなり、
     正しく書かれた意見が毎回 `failed: tampered` として捨てられていた (repro R2 で実測)。
-    現在は minutes.md 自身の hash 証跡 (`.integrity/<slug>/minutes.md.sha256`) と
-    ロックで、「他 dispatcher の正当な追記」と「dispatcher 外の書き換え」を分ける。
+    現在は git の clean 検査 (D12 / roundtable.ledger) とロックで、「他 dispatcher の
+    正当な追記 (commit 済み = clean)」と「dispatcher 外の書き換え (dirty)」を分ける。
 
     timeout に達した時は `.json` が無いというだけで failed:timeout にせず、
     `<inv>.json.tmp` の有無と中身を見て「無応答」と「rename 漏れ」を分ける。

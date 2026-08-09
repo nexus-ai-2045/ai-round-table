@@ -25,11 +25,16 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-LOCK_TIMEOUT_S = 60.0
+LOCK_TIMEOUT_S = 120.0
 """取得を諦めるまでの秒数。STALE_AFTER_S より長くする。
 
 短くすると「残骸を回収する前に諦める」ため、一度死んだプロセスの残骸で
 以後の全 dispatch が止まる。回収窓を必ず含む長さにしておく。
+
+2026-08-10 (D12) に 60 → 120 へ拡大: 保持区間に git 呼び出し (clean 検査 +
+commit、Windows 実測 ~0.1-0.3s) が入ったため、高並列 (8 writer 級) では
+直列合計が 60s を超えうる。正常保持は依然 1s 未満で、STALE_AFTER_S (30s) の
+「正常保持と残骸を取り違えない」余裕は変わらない。
 """
 
 STALE_AFTER_S = 30.0

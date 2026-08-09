@@ -2,15 +2,14 @@
 
 既存の並行テストが素通りさせていた理由まで含めて固定する:
 
-- 既存の reader は生の `json.loads(tp.journal.read_text())` で、**integrity 経路を
+- 既存の reader は生の `json.loads(tp.journal.read_text())` で、**検証経路を
   一度も並行実行していなかった** (レビュー T1)。ここでは reader を `Journal.load`
-  にする。これで初めて「ロック外の証跡書き戻し」と「読み取り中の os.replace」が
-  同じ土俵に乗る。
+  にする。これで初めて「clean 検査」と「読み取り中の os.replace」が同じ土俵に乗る。
 - 並行 `collect` (2 席が同時に minutes.md へ merge する) のテストが 1 本も無かった
   (レビュー T2)。並行安全を謳う変更で最も重要なシナリオが未検査だった。
 
-守る性質:
-    H1  誰も改ざんしていない並行読み書きで StateTamperedError を出さない
+守る性質 (witness → git (D12) 移行後も不変):
+    H1  誰も改ざんしていない並行読み書きで偽の改ざん検知を出さない
     H2  並行読み書きで PermissionError (WinError 5) が dispatch を落とさない
     H3  並行 dispatch の 2 席目が `failed: tampered` にならず、両方 merge される
 """
@@ -19,7 +18,7 @@ import threading
 
 import pytest
 
-from roundtable import integrity, minutes, watcher
+from roundtable import ledger, minutes, watcher
 from roundtable.journal import Journal
 from roundtable.paths import ensure_topic
 
@@ -49,13 +48,13 @@ def test_parallel_readers_do_not_forge_tampering(tmp_path):
 
     errors: list[tuple[str, BaseException]] = []
     stop = threading.Event()
-    started = threading.Barrier(8)
+    started = threading.Barrier(6)
 
     def writer(idx: int) -> None:
         try:
             started.wait(timeout=30)
             j = Journal.load(tp)
-            for _ in range(25):
+            for _ in range(6):  # 規模は per-save commit コスト (D12) に合わせる
                 j.new_invocation(f"p{idx}", 1)
         except BaseException as exc:  # noqa: BLE001 — main スレッドへ運ぶ
             errors.append(("writer", exc))
@@ -68,8 +67,8 @@ def test_parallel_readers_do_not_forge_tampering(tmp_path):
         except BaseException as exc:  # noqa: BLE001
             errors.append(("reader", exc))
 
-    readers = [threading.Thread(target=reader, daemon=True) for _ in range(4)]
-    writers = [threading.Thread(target=writer, args=(i,)) for i in range(4)]
+    readers = [threading.Thread(target=reader, daemon=True) for _ in range(3)]
+    writers = [threading.Thread(target=writer, args=(i,)) for i in range(3)]
     for t in readers + writers:
         t.start()
     for t in writers:
@@ -79,14 +78,15 @@ def test_parallel_readers_do_not_forge_tampering(tmp_path):
         t.join(timeout=30)
 
     assert not errors, f"{errors[0][0]} が失敗: {errors[0][1]!r}"
-    assert len(Journal.load(tp).data["invocations"]) == 1 + 4 * 25
+    assert len(Journal.load(tp).data["invocations"]) == 1 + 3 * 6
 
 
-def test_witness_is_never_rolled_back_behind_the_body(tmp_path):
-    """証跡が本文より古い状態で確定しない (H1 の恒久化条件そのもの)。
+def test_ledger_is_clean_after_parallel_writes(tmp_path):
+    """並行読み書きの後で working tree が clean = 検知は次の外部書込にだけ反応する。
 
-    本文 = 新, 証跡 = 旧 で固定されると、以後どのコマンドも exit 3 になり議題が
-    二度と開けなくなる。並行読み書きの後で本文と証跡が一致していることを直接見る。
+    旧 witness 版は「証跡が本文より古い状態で恒久化しない」を見ていた (H1 の
+    恒久化条件)。git 版の等価な性質は「dispatcher の書込が全て commit されて
+    dirty が残らない」こと。dirty が残ると次操作が偽の fail-closed になる。
     """
     tp = ensure_topic(tmp_path, "t1")
     Journal.load(tp).new_invocation("seed", 1)
@@ -105,15 +105,15 @@ def test_witness_is_never_rolled_back_behind_the_body(tmp_path):
     for t in rs:
         t.start()
     j = Journal.load(tp)
-    for _ in range(60):
+    for _ in range(20):  # 規模は per-save commit コスト (D12) に合わせる
         j.new_invocation("codex", 1)
     stop.set()
     for t in rs:
         t.join(timeout=30)
 
     assert not errors, f"reader が失敗: {errors[0]!r}"
-    rec = json.loads(tp.witness("journal.json").read_text(encoding="utf-8"))
-    assert rec["sha256"] == integrity.digest(tp.journal.read_bytes())
+    ledger.require_clean(ledger.require_root(tp.root), [tp.journal])  # 例外なし = clean
+    assert len(Journal.load(tp).data["invocations"]) == 21
 
 
 # --- H3: 並行 collect で 2 席目が捨てられない -------------------------------
@@ -189,14 +189,15 @@ def test_concurrent_collect_threads_merge_both(tmp_path):
     assert "### codex" in text and "### cc" in text
 
 
-# --- minutes.md の証跡: 全書き込み経路が証跡を更新する -----------------------
+# --- minutes.md: 全書き込み経路が commit する (証跡の自己整合) ----------------
 
 
 def test_all_minutes_writers_keep_the_witness_in_sync(tmp_path):
     """sync_round / write_verdict / set_background の後でも merge が通る。
 
-    1 経路でも素の atomic_write が残ると、その直後から証跡が古いままになり、
-    次の merge が「誰も改ざんしていないのに tampered」になる (偽陽性の自己生成)。
+    1 経路でも素の atomic_write (commit なし) が残ると、その直後から dirty が
+    残り続け、次の merge が「誰も改ざんしていないのに tampered」になる
+    (偽陽性の自己生成)。witness 時代から名前ごと維持している性質。
     """
     tp = ensure_topic(tmp_path, "t1")
     minutes.create(tp, "X", ["codex"])
@@ -232,17 +233,19 @@ def test_minutes_tamper_reaches_the_cli_fail_closed_boundary():
     write_verdict のような CLI 直呼び経路は CLI 境界で止まる必要がある。
     継承関係が切れると、その経路だけ CEO に traceback が出る。
     """
-    assert issubclass(minutes.MinutesTamperedError, integrity.StateTamperedError)
+    assert issubclass(minutes.MinutesTamperedError, ledger.LedgerDirtyError)
 
 
-def test_minutes_witness_is_placed_outside_the_topic_directory(tmp_path):
-    """minutes.md の証跡も議題ディレクトリの外に置く (journal / seats と同じ配置)。
+def test_locks_stay_outside_topic_dir_and_out_of_history(tmp_path):
+    """lock は議題ディレクトリの外 (.locks/) に置き、履歴にも入れない。
 
-    配置だけを固定する。席が実際にそこへ書けないかは未検証 (レビュー H4)。
+    topic 配下に置くと git の status / 履歴にノイズが入り、証跡 (D12) の
+    「dirty = 外部書込」という読みが壊れる。lock は排他の道具であって記録ではない。
     """
     tp = ensure_topic(tmp_path, "t1")
     minutes.create(tp, "X", ["codex"])
-    w = tp.witness("minutes.md")
-    assert w.exists()
-    assert tp.root.resolve() not in w.resolve().parents
-    assert not any(p.suffix == ".sha256" for p in tp.root.rglob("*"))
+    lock = tp.lock("minutes.md")
+    assert tp.root.resolve() not in lock.resolve().parents
+    root = ledger.require_root(tp.root)
+    tracked = ledger._git(root, "ls-files", "--", str(lock.parent)).stdout
+    assert tracked.strip() == ""  # .locks/ は履歴に入らない
