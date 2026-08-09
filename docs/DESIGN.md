@@ -35,11 +35,13 @@ Codex / CC / Grok / Gemini を Windows 上でリンクし、人間 (CEO) が司�
 | D4 | **dispatcher は AI を実行しない** — packet 生成・回収検証・議事録/journal 管理のみの決定的ツール | CEO 要件 |
 | D5 | **relay 3 段自動化** (§4)。人間 relay は縮退運転 | CEO GO 2026-07-27 |
 | D6 | 出力契約 = schema 検証 JSON + 予約見出し防御。裁定は機械管理フィールドのみから描画 | Codex1st#5 |
-| D7 | 議事録保護は「防止」でなく「検知」(merge 前 hash 照合 + git、fail-closed) | アプリ agent の FS 権限は制御外。Codex1st#2 の hash 方式を継承 |
+| D7 | 議事録保護は「防止」でなく「検知」(fail-closed)。**検知手段は v0.3 で hash 照合 → git に一本化 (D12)** | アプリ agent の FS 権限は制御外。Codex1st#2 の hash 方式は D12 で superseded |
 | D8 | Evidence 型付け (observed/log/diff/source/argument/none)。自己申告であり検証済み表示にしない | Codex1st#8 |
 | D9 | round 上限 3。収束の自動判定はしない | CC#1 + ai-council-framework の独立採用例 |
 | D10 | v0.1 に要約層・コスト警告を入れない (raw 提示)。v0.2 で non-authoritative + 原文参照付きで導入 | Codex1st#7/#9 |
 | D11 | **CC (ホストランタイム) は席にしない**。参加者は異ベンダーの AI で埋める | 独立性 > 頭数 (下記 D11 節) |
+| D12 | **改ざん証跡は git に一本化**。`.integrity/` witness 層は廃止。lock は排他専用として維持 | witness は grok 席から届く (実測) = 検知不成立。git は既にあり、より強い (下記 D12 節) |
+| D13 | **議事録 root は必ず git 管理下**。dispatcher が検査し、なければ init する。実運用の正本 root は本 repo の `minutes/` | CEO 要件「議事録は Git 管理」をツールが強制する。引数任せにしない |
 
 ## 3. アーキテクチャ
 
@@ -95,6 +97,42 @@ CEO（判断のみ: 議題・指名・裁定・打ち切り・割り込み）
 **AI の頭数より独立性の方が価値が高い。** 先行 OSS (agent-review-panel) の既知の弱点は
 「全レビュアーが同一モデル = 共有バイアス」であり、本設計は異ベンダー構成でこれを構造的に
 避けている。そこを崩してまで CC を席にする利得がない。
+
+### D12/D13: 証跡は git に一本化 (2026-08-10 確定)
+
+CEO の要件定義: **人間判断がメイン / 共有点は議事録だけ / 議事録は git 管理 /
+各 AI は自分のチャットで議事録を読めれば足りる**。この要件に照らすと、
+`.integrity/` の witness 層 (状態ファイルの sha256 控えを議題ディレクトリの外に置き、
+dispatcher が merge 前に照合する) は二重に間違っていた:
+
+1. **効かない**。「席は自分の作業部屋の外に書けない」前提だったが、grok 席は
+   Windows で PowerShell を任意実行でき、`.integrity/` に実測で届く
+   (spike `raw-grok-p3-packet.jsonl`)。対象を書き換えられる相手は控えも書き換えられる。
+2. **既にある仕組みと重複する**。議事録が git 管理なら、改ざんの記録は git そのもの。
+   `git diff` を人間が読む — 本システムの「人間が判断する」原則そのままの形で検知できる。
+
+| 案 | 検知が成立する条件 | 判定 |
+|---|---|---|
+| witness 層 (`.integrity/`) | 席が sandbox に閉じていること — **grok で実測破綻、codex は未検証** | **廃止** |
+| ローカル git | 席が git 履歴を書き換えないこと (working tree の改変は次の操作で dirty として出る) | **採用 (一次検知)** |
+| origin へ push した履歴 | 席がリモートに届かないこと — 席に credential を渡さない限り成立 | **採用 (最終証跡)** |
+
+- **Principle**: 改ざんは防がず検知する (D7)。検知者は機械でなく最終的に人間 (D1)。
+- **Invariant**: dispatcher は書込操作の前に対象 topic path の working tree が clean で
+  あることを要求し、書込後に auto-commit する。dirty = dispatcher 以外の書込。
+- **Detector**: 操作前 clean 検査 (fail-closed で停止し diff を提示) + push 済み履歴との照合。
+- **Repair Path**: CEO が `git diff` を読んで裁定。正当なら commit、不当なら checkout で復元。
+- **Evidence**: grok 席の sandbox 破れ (2026-08-07 実測) / journal 消失事故 (並行 dispatch、
+  2026-08-07) — 後者の教訓である **lock (排他) は証跡と別問題として維持**する。
+
+D13 はこの前提を支える: 検知が git 依存になるため、**議事録が git 外に置かれた瞬間に
+検知が消える**。だから root の git 管理は運用注意ではなくツールの検査事項にする
+(new-topic 時に git work tree でなければ init。実運用の正本 root は本 repo の `minutes/`。
+Tier1 実証 `minutes/tier1-final/` も ignore を外して履歴に残す)。
+
+副作用として、witness 前提で保留していた判断が消える: **grok 席 A/B/C 判断は不要**
+(sandbox が破れていても git で検知できる)、**codex sandbox 実効範囲 spike も不要**
+(検知が sandbox に依存しなくなった)。CLI の grok 警告も削除する。
 
 ### ACP 収束戦略 (v6 追加)
 
