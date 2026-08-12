@@ -186,3 +186,18 @@ def test_cli_cwd_is_absolute_for_relative_root(tmp_path, monkeypatch):
     main(["dispatch", "t1", "--participant", "codex", "--timeout", "0.1", "--root", "."])
 
     assert os.path.isabs(seen["cwd"]), f"相対パスが漏れている: {seen['cwd']}"
+
+
+def test_timeouts_have_margin_over_measured_latency():
+    """実測値より十分大きい timeout を保つ (実往復スモークで踏んだ回帰の再発防止)。
+
+    2026-08-06 実測 (Windows / codex-cli 0.144.6): initialize 6.66s / thread/start 20.9s。
+    元の既定は initialize=8s / thread/start=5s で、**thread/start が必ず timeout し
+    Tier1 は 100% Tier3 に縮退していた**。fake stdio のユニットテストは即答するため
+    この穴を検出できない — 数値そのものを不変条件として固定する。
+    """
+    from roundtable import relay_codex as rc
+
+    assert rc.TIMEOUT_INITIALIZE >= 30, "実測 6.66s に対し余裕がない"
+    assert rc.TIMEOUT_THREAD_START >= 240, "実測 20.9-58.4s + 負荷時 120s 超に対し余裕がない"
+    assert rc.TIMEOUT_TURN_START >= 60

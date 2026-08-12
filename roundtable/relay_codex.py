@@ -3,6 +3,10 @@
 CEO 禁止は「CLI で AI を実行する」こと。ここは既存/起動した app-server に turn を
 送るだけで、対話履歴はアプリ側スレッドに残る想定 (DESIGN v6 §0 / §4 / spike)。
 
+複数ラウンド: dispatch は 1 回ごとに別プロセスなので、2 ラウンド目の app-server は
+前回の thread を持っていない。`seat["thread_ref"]` があれば turn/start の前に
+`thread/resume` を撃ち、**同じ席 (= CEO が読んでいるチャット) を使い続ける**。
+
 失敗時は RelayError を上げ、呼び出し側 (FallbackRelay) が Tier3 に縮退する。
 """
 from __future__ import annotations
@@ -10,127 +14,148 @@ from __future__ import annotations
 import json
 import os
 import queue
-import signal
 import subprocess
 import threading
 import time
 from typing import Any
 
 from .relay import RelayError
+from .relay_process import ProcessTree
 
 
-class _ProcessTree:
-    """spawn した app-server とその子孫をまとめて回収するための箱。
+# 実測 (2026-08-06, Windows / codex-cli 0.144.6):
+#   initialize   6.66s
+#   thread/start 20.9s
+# 追加実測: idle 58.4s / 他プロセス並走時は 120s 超。ばらつきが非常に大きいので
+# thread/start は 300s 枠にする。main の既定 (5s) では必ず timeout していた。
+TIMEOUT_INITIALIZE = 60.0
+TIMEOUT_THREAD_START = 300.0
+# thread/resume は thread/start と同格の重さと見て同じ枠を取る (spike 実測では
+# 数秒で返ったが、start が 20.9s かかる環境で resume だけ軽い保証はない)。
+TIMEOUT_THREAD_RESUME = 300.0
+TIMEOUT_THREAD_NAME = 30.0
+TIMEOUT_TURN_START = 120.0
 
-    親を terminate しても子孫は道連れにならない (Windows の TerminateProcess も
-    POSIX の SIGTERM も直接の対象しか殺さない)。app-server は sandbox 内で
-    コマンドを実行しうるので、親の終了経路とは別に「木ごと」の回収経路が要る。
 
-    - Windows: Job Object + JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE。
-      ハンドルを閉じた時点で木ごと確実に終わる (terminate が成功した経路でも取りこぼさない)。
-    - POSIX: start_new_session=True で新しいプロセスグループにし、killpg で木ごと送る。
+MIN_APP_SERVER_VERSION = (0, 144)
+"""app-server が thread/start に応答する最低版 (実測)。
+
+2026-08-06 実測: PATH 先頭に古い codex (0.130.0-alpha.5) があり、素の "codex" で
+spawn するとそちらを掴む。その版の app-server は initialize には 1.3s で答えるが
+**thread/start に一切応答しない** (60s 無応答)。timeout を伸ばしても直らない —
+「遅い」のではなく「返さない」ため。バイナリを版で選ぶ必要がある。
+"""
+
+
+def _parse_version(text: str) -> tuple[int, ...]:
+    """`codex-cli 0.144.6` → (0, 144, 6)。読めなければ空 tuple。"""
+    for token in text.split():
+        head = token.split("-", 1)[0]
+        parts = head.split(".")
+        if len(parts) >= 2 and all(x.isdigit() for x in parts[:2]):
+            return tuple(int(x) for x in parts if x.isdigit())
+    return ()
+
+
+def _probe_version(path: str) -> tuple[int, ...]:
+    try:
+        out = subprocess.run(
+            [path, "--version"], capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=30, shell=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ()
+    return _parse_version((out.stdout or "") + (out.stderr or ""))
+
+
+class UnsupportedCodexError(RelayError):
+    """PATH 上の codex が**全て**実測で MIN_APP_SERVER_VERSION 未満だった。
+
+    RelayError を継承しているので FallbackRelay の既存 `except RelayError` が
+    そのまま拾い、Tier3 へ即縮退する (分岐を足さずに済む)。
     """
 
-    def __init__(self) -> None:
-        self._job = None
+    def __init__(self, path: str, version: tuple[int, ...]):
+        self.path = path
+        self.version = version
+        shown = ".".join(str(x) for x in version) or "unknown"
+        need = ".".join(str(x) for x in MIN_APP_SERVER_VERSION)
+        super().__init__(
+            f"codex {shown} < {need} (app-server が thread/start に応答しない版): "
+            f"{path}. PATH 上に他の候補も無いので Tier1 は成立しない"
+        )
 
-    def spawn_kwargs(self) -> dict:
-        """Popen に渡す追加引数 (POSIX のみプロセスグループを分離する)。"""
-        return {} if os.name == "nt" else {"start_new_session": True}
 
-    def adopt(self, proc: subprocess.Popen) -> None:
-        """spawn 済みプロセスを木の管理下に置く (Windows のみ実体がある)。"""
-        if os.name != "nt":
-            return
-        try:
-            import ctypes
-            from ctypes import wintypes
+def resolve_codex_binary(preferred: str | None = None) -> str:
+    """app-server が使える codex を選ぶ。
 
-            k32 = ctypes.WinDLL("kernel32", use_last_error=True)
-            job = k32.CreateJobObjectW(None, None)
-            if not job:
-                return
+    素の "codex" を信じない: PATH 先頭が古い版だと thread/start が無応答になり、
+    Tier1 が「遅い」ではなく「絶対に届かない」状態になる (実測)。
+    PATH 上の候補を全部見て、MIN_APP_SERVER_VERSION 以上の最初の 1 本を返す。
 
-            class _BasicLimit(ctypes.Structure):
-                _fields_ = [
-                    ("PerProcessUserTimeLimit", ctypes.c_int64),
-                    ("PerJobUserTimeLimit", ctypes.c_int64),
-                    ("LimitFlags", wintypes.DWORD),
-                    ("MinimumWorkingSetSize", ctypes.c_size_t),
-                    ("MaximumWorkingSetSize", ctypes.c_size_t),
-                    ("ActiveProcessLimit", wintypes.DWORD),
-                    ("Affinity", ctypes.c_size_t),
-                    ("PriorityClass", wintypes.DWORD),
-                    ("SchedulingClass", wintypes.DWORD),
-                ]
+    候補が全部「実測で下回っていた」場合は **UnsupportedCodexError を即上げる**。
+    以前は最も新しい古版を返していたが、それだと呼び出し側は
+    initialize に成功したあと thread/start の 300s 枠を丸ごと待ってから縮退し、
+    doctor も 180s 待ってから既知の非互換を報告する。届かないと分かっている相手を
+    待つ理由が無いので、解決の時点で落として縮退と診断の応答性を守る。
 
-            class _IoCounters(ctypes.Structure):
-                _fields_ = [(n, ctypes.c_uint64) for n in
-                            ("ReadOperationCount", "WriteOperationCount",
-                             "OtherOperationCount", "ReadTransferCount",
-                             "WriteTransferCount", "OtherTransferCount")]
+    版が**読めなかった**候補は落とさない (`--version` の出力形式が変わっただけの
+    可能性があり、古いという積極的な証拠が無い)。読めない候補が 1 本でもあれば
+    それを返して実際に喋らせる。
+    """
+    if preferred:
+        return preferred
+    candidates: list[str] = []
+    seen: set[str] = set()
+    for directory in (os.environ.get("PATH") or "").split(os.pathsep):
+        if not directory:
+            continue
+        for name in ("codex.cmd", "codex.exe", "codex"):
+            cand = os.path.join(directory, name)
+            if cand in seen or not os.path.isfile(cand):
+                continue
+            seen.add(cand)
+            candidates.append(cand)
+    newest_old: tuple[tuple[int, ...], str] | None = None
+    unknown: str | None = None
+    for cand in candidates:
+        ver = _probe_version(cand)
+        if ver >= MIN_APP_SERVER_VERSION:
+            return cand
+        if ver:
+            if newest_old is None or ver > newest_old[0]:
+                newest_old = (ver, cand)
+        elif unknown is None:
+            unknown = cand
+    if unknown:
+        return unknown
+    if newest_old:
+        raise UnsupportedCodexError(newest_old[1], newest_old[0])
+    return "codex"  # 候補ゼロ。spawn 時に OSError で速く落ちる
 
-            class _ExtLimit(ctypes.Structure):
-                _fields_ = [
-                    ("BasicLimitInformation", _BasicLimit),
-                    ("IoInfo", _IoCounters),
-                    ("ProcessMemoryLimit", ctypes.c_size_t),
-                    ("JobMemoryLimit", ctypes.c_size_t),
-                    ("PeakProcessMemoryUsed", ctypes.c_size_t),
-                    ("PeakJobMemoryUsed", ctypes.c_size_t),
-                ]
 
-            info = _ExtLimit()
-            info.BasicLimitInformation.LimitFlags = 0x2000  # KILL_ON_JOB_CLOSE
-            k32.SetInformationJobObject(job, 9, ctypes.byref(info), ctypes.sizeof(info))
-            handle = int(proc._handle)  # type: ignore[attr-defined]
-            if k32.AssignProcessToJobObject(job, handle):
-                self._job = job
-            else:
-                k32.CloseHandle(job)
-        except Exception:
-            self._job = None  # Job が使えなくても kill_tree のフォールバックがある
-
-    def kill_tree(self, pid: int) -> None:
-        """まだ生きている子孫を強制終了する (terminate で死ななかった時)。"""
-        if os.name == "nt":
-            try:
-                subprocess.run(
-                    ["taskkill", "/T", "/F", "/PID", str(pid)],
-                    check=False, shell=False, capture_output=True, timeout=10,
-                )
-            except (OSError, subprocess.SubprocessError):
-                pass
-            return
-        try:
-            os.killpg(os.getpgid(pid), signal.SIGKILL)  # POSIX: グループごと
-        except (OSError, ProcessLookupError):
-            pass
-
-    def close(self) -> None:
-        """Job を閉じる = Windows では木ごと確実に終わる。terminate 成功時の取りこぼし対策。"""
-        if self._job is None:
-            return
-        try:
-            import ctypes
-
-            ctypes.WinDLL("kernel32", use_last_error=True).CloseHandle(self._job)
-        except Exception:
-            pass
-        self._job = None
+# プロセスツリー回収は Grok 席と共通 (roundtable/relay_process.py へ移設)。
+# 旧名 `_ProcessTree` はこのモジュール内の参照 / 既存テストの monkeypatch 経路を
+# 維持するための別名で、実体は共有クラス 1 つだけ。
+_ProcessTree = ProcessTree
 
 
 class CodexAppServerRelay:
     tier = 1
 
-    def __init__(self, binary: str = "codex", cwd: str | None = None):
-        self.binary = binary
+    def __init__(self, binary: str | None = None, cwd: str | None = None):
+        # 素の "codex" は PATH 先頭の古い版を掴みうる (thread/start 無応答) ため、
+        # 版を見て選ぶ。明示指定があればそれを尊重する。
+        self.binary = resolve_codex_binary(binary)
         self.cwd = cwd
         self._proc: subprocess.Popen[str] | None = None
         self._q: queue.Queue[dict] = queue.Queue()
         self._id = 0
         self._reader: threading.Thread | None = None
         self._tree = _ProcessTree()
+        # このプロセスの app-server が保持している thread id。
+        # app-server は再起動のたびに thread を失うので、プロセスの寿命と一致させる。
+        self._loaded_threads: set[str] = set()
 
     def _next_id(self) -> int:
         self._id += 1
@@ -140,6 +165,10 @@ class CodexAppServerRelay:
         if self._proc and self._proc.poll() is None:
             return
         self._tree = _ProcessTree()
+        # 新しいプロセスは過去の thread を何も知らない。
+        # ここを消し忘れると 2 プロセス目が resume を飛ばして turn/start を撃ち、
+        # `-32600 thread not found` で落ちる (実測の失敗そのもの)。
+        self._loaded_threads.clear()
         try:
             self._proc = subprocess.Popen(
                 [self.binary, "app-server"],
@@ -168,7 +197,7 @@ class CodexAppServerRelay:
                 },
                 "capabilities": {},
             },
-            timeout=8,
+            timeout=TIMEOUT_INITIALIZE,
         )
         self._notify("initialized", {})
 
@@ -207,47 +236,81 @@ class CodexAppServerRelay:
                 return msg.get("result") or {}
         raise RelayError(f"{method}: timeout after {timeout}s")
 
+    def _thread_params(self) -> dict[str, Any]:
+        """thread/start と thread/resume で共通の安全パラメータ。
+
+        sandbox / approvalPolicy は **必ず明示する**。省略するとサーバ既定に従い、
+        実測では danger-full-access になりうる (= 席が repo 全体を書ける)。席の仕事は
+        scratch に JSON を 1 本書くことだけなので workspace-write に絞り、cwd を議題
+        ディレクトリにして書込範囲をそこへ閉じる。
+
+        **resume 側でも同じものを送ること**。spike 実測では、read-only で開始した
+        thread が sandbox 未指定の resume 後に dangerFullAccess に戻った (cwd は継承
+        されるが sandbox は継承されない)。start だけ固めても 2 ラウンド目に穴が開くので、
+        両経路をここから組み立てて drift を構造的に防ぐ。
+        """
+        params: dict[str, Any] = {
+            "sandbox": "workspace-write",
+            # 承認要求で無言停止しないため never。実効的な境界は上の sandbox。
+            "approvalPolicy": "never",
+        }
+        if self.cwd:
+            params["cwd"] = self.cwd
+        return params
+
+    def _resume_thread(self, thread_id: str) -> None:
+        """既存 thread をこのプロセスの app-server に読み込ませる (複数ラウンド対応)。
+
+        app-server は起動のたびに thread を保持しない。resume を挟まずに turn/start を
+        撃つと `-32600 thread not found` で即失敗し、2 ラウンド目以降が丸ごと Tier3 へ
+        縮退する (2026-08-06 実測)。プロセスあたり 1 回だけ撃てば足りる。
+        """
+        if thread_id in self._loaded_threads:
+            return
+        params = self._thread_params()
+        params["threadId"] = thread_id
+        self._rpc("thread/resume", params, timeout=TIMEOUT_THREAD_RESUME)
+        self._loaded_threads.add(thread_id)
+
+    def _start_thread(self, seat: dict) -> str:
+        """新しい thread を作り、seat に thread_ref を書き戻す。"""
+        # ephemeral は使わない: 一時席にすると会話がアプリ側に残らず、
+        # 「CEO が席のチャットを直接読める」要件 (DESIGN v6 §0) を壊す。
+        result = self._rpc("thread/start", self._thread_params(), timeout=TIMEOUT_THREAD_START)
+        thread = result.get("thread") or {}
+        thread_id = thread.get("id")
+        if not thread_id:
+            raise RelayError(f"thread/start returned no id: {result!r}")
+        seat["thread_ref"] = thread_id
+        self._loaded_threads.add(thread_id)  # 作った直後は load 済み = resume 不要
+        name = seat.get("thread_name") or f"rt-{seat.get('topic', 'topic')}-codex"
+        try:
+            self._rpc(
+                "thread/name/set",
+                {"threadId": thread_id, "name": name},
+                timeout=TIMEOUT_THREAD_NAME,
+            )
+        except RelayError:
+            # 名前付け失敗は致命ではない
+            pass
+        return thread_id
+
     def send(self, seat: dict, text: str) -> str:
         try:
             self._ensure()
             thread_id = seat.get("thread_ref")
-            if not thread_id:
-                params: dict[str, Any] = {}
-                if self.cwd:
-                    params["cwd"] = self.cwd
-                # sandbox / approvalPolicy は **必ず明示する**。省略するとサーバ既定に
-                # 従い、実測では danger-full-access になりうる (= 席が repo 全体を書ける)。
-                # 席の仕事は scratch に JSON を 1 本書くことだけなので workspace-write に
-                # 絞り、cwd を議題ディレクトリにして書込範囲をそこへ閉じる。
-                params["sandbox"] = "workspace-write"
-                # 承認要求で無言停止しないため never。実効的な境界は上の sandbox。
-                params["approvalPolicy"] = "never"
-                # ephemeral は使わない: 一時席にすると会話がアプリ側に残らず、
-                # 「CEO が席のチャットを直接読める」要件 (DESIGN v6 §0) を壊す。
-                # 応答なし環境でも長待ちしない。失敗は FallbackRelay が Tier3 へ。
-                result = self._rpc("thread/start", params, timeout=5)
-                thread = result.get("thread") or {}
-                thread_id = thread.get("id")
-                if not thread_id:
-                    raise RelayError(f"thread/start returned no id: {result!r}")
-                seat["thread_ref"] = thread_id
-                name = seat.get("thread_name") or f"rt-{seat.get('topic', 'topic')}-codex"
-                try:
-                    self._rpc(
-                        "thread/name/set",
-                        {"threadId": thread_id, "name": name},
-                        timeout=5,
-                    )
-                except RelayError:
-                    # 名前付け失敗は致命ではない
-                    pass
+            if thread_id:
+                # 2 ラウンド目以降。seats.json に残った thread_ref を同じ席として使い続ける。
+                self._resume_thread(thread_id)
+            else:
+                thread_id = self._start_thread(seat)
             self._rpc(
                 "turn/start",
                 {
                     "threadId": thread_id,
                     "input": [{"type": "text", "text": text}],
                 },
-                timeout=20,
+                timeout=TIMEOUT_TURN_START,
             )
             return "tier1-sent"
         except RelayError:
@@ -271,6 +334,8 @@ class CodexAppServerRelay:
         proc = self._proc
         tree = getattr(self, "_tree", None) or _ProcessTree()
         self._proc = None
+        # プロセスが死ねば thread は落ちる。次の送付では resume からやり直す。
+        self._loaded_threads.clear()
         if proc is None or proc.poll() is not None:
             tree.close()
             return
