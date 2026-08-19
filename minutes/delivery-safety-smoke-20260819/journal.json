@@ -10,8 +10,8 @@
   "239d4fe6f985": {
    "participant": "codex",
    "round": 2,
-   "state": "prepared",
-   "detail": ""
+   "state": "delivered",
+   "detail": "tier1:tier1-sent"
   }
  },
  "human_actions": [
