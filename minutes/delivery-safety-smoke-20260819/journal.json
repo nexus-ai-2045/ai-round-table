@@ -4,8 +4,8 @@
   "fbd7970ceec6": {
    "participant": "codex",
    "round": 1,
-   "state": "delivered",
-   "detail": "tier1:tier1-sent"
+   "state": "output-received",
+   "detail": ""
   }
  },
  "human_actions": [
