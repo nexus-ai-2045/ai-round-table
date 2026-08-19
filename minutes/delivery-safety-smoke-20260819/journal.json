@@ -14,6 +14,12 @@
    "action": "new-topic",
    "detail": "delivery-safety-smoke-20260819",
    "at": "2026-08-19T00:29:19.158991+00:00"
+  },
+  {
+   "id": "bc72165c8b63",
+   "action": "dispatch",
+   "detail": "codex:fbd7970ceec6",
+   "at": "2026-08-19T00:29:20.653362+00:00"
   }
  ],
  "conflicts": []
