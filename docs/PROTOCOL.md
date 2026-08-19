@@ -48,8 +48,9 @@ python -m roundtable.cli dispatch <slug> --participant <ai> [--role-hint "<視�
 
 dispatch は内部で snapshot 更新・invocation 発行・packet 生成・relay・(既定) collect まで一括。
 `--async` のときは搬出だけ行い、回収は `collect --invocation <id>` で行う。
-`--tier 1` は Codex 席で app-server 経由の送付を試み、失敗時は **自動で Tier3 に縮退**する
-(Tier2 へは昇格しない)。
+`--tier 1` は Codex 席で app-server 経由の送付を試みる。起動失敗など未送信が確定した
+失敗だけ **自動で Tier3 に縮退**する (Tier2 へは昇格しない)。`turn/start` timeout は
+席が受理済みの可能性があるため `delivery-unknown` として停止し、自動縮退・自動再送しない。
 
 **パイプ注意 (S2)**: `dispatch | tail` のようにパイプすると shell の exit code が
 末尾コマンドのものになり、timeout 失敗が成功に見える。結果の機械確認は常に
@@ -132,6 +133,7 @@ Desktop socket 不在なら **実席は Tier3 貼付が本線** (2026-08-07 実�
 | `schema` | 出力契約 (invocation_id/participant/opinion/claims) を満たさない | 違反理由をそのまま提示 |
 | `id-mismatch` | invocation_id または participant が発行時と不一致 (貼り間違い等) | 別 invocation の混入として提示 |
 | `tampered` | minutes.md が hash 証跡と不一致 (dispatcher 外で書き換えられた) | dispatcher 外での改変の可能性を明示、CEO 判断待ち |
+| `relay` | 席への送信前に確定失敗した、または送達成否が不明 | detail を提示。`delivery unknown` を含む場合は席を確認するまで再送しない |
 
 いずれも journal に記録され、`close` 時の失敗一覧に必ず現れる (偽装成功防止)。
 

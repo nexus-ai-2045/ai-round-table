@@ -15,7 +15,7 @@ from .filelock import LockTimeout
 from .journal import Journal
 from .ledger import LedgerDirtyError
 from .paths import ensure_topic
-from .relay import get_relay, load_seats, save_seats
+from .relay import DeliveryUnknownError, get_relay, load_seats, save_seats
 
 
 def _write_last_result(tp, payload: dict) -> None:
@@ -126,6 +126,28 @@ def _cmd_dispatch(args) -> int:
             )
             try:
                 relay_label = relay.send(seat, text)
+            except DeliveryUnknownError as exc:
+                # thread/start 済みなら、その参照を失うと再実行時に別席へ二重送信する。
+                seat["tier"] = relay.tier
+                seats[seat_key] = seat
+                save_seats(tp, seats)
+                journal.set_state(inv, "failed", f"delivery-unknown: {exc}")
+                _write_last_result(
+                    tp,
+                    {
+                        "ok": False,
+                        "reason": "delivery-unknown",
+                        "detail": str(exc),
+                        "thread_ref": seat.get("thread_ref"),
+                        "invocation": inv,
+                        "exit_code": 1,
+                    },
+                )
+                print(
+                    f"\n[failed] invocation: {inv} / reason: delivery-unknown / {exc}\n"
+                    "[stop] 席が受理済みの可能性があるため、自動再送しません。"
+                )
+                return 1
             except Exception as exc:  # Tier3 失敗など
                 journal.set_state(inv, "failed", f"relay: {exc}")
                 _write_last_result(

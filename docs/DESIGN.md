@@ -144,7 +144,9 @@ gemini-cli / claude は `--acp` 実装済み、Grok Build は ACP 対応、agy �
 - Tier1 の位置づけ: CEO 禁止事項は「CLI で AI を**実行**する」こと。Tier1 はプロセスを
   起こさず、既存の席 (アプリで可視) へ turn を送るだけであり、履歴もアプリに残る
 - relay 層は adapter として分離し、席ごとに `tier` を seats.json に記録。
-  Tier1 障害時は自動で Tier3 に縮退し、その旨を CEO に表示 (勝手に Tier2 へ昇格しない)
+  Tier1 の未送信が確定した障害は自動で Tier3 に縮退し、その旨を CEO に表示する
+  (勝手に Tier2 へ昇格しない)。`turn/start` timeout のように席が受理した可能性が
+  残る場合は、二重送信を避けるため縮退・再送せず `delivery-unknown` として CEO 判断へ戻す
 - 補助発見: Codex app-server は `fs/readFile` / `fs/watch` 等の FS API も持つ —
   scratch 出力の検証・監視を app-server 側からも行える可能性 (spike 1 の観察項目)
 
@@ -172,7 +174,8 @@ prepared → delivered(tier 記録) → output-received → validated → merged
 - Tier3 の delivered は「クリップボード搬出済み」であり席着信は未知 — 未着のまま
   timeout したら「未貼り付け?」として CEO に確認 (自動再送しない)
 - merge は invocation_id で冪等。round は指名バッチ全 merge で +1 (機械更新)
-- 失敗分類: 空出力 / schema 違反 / id 不一致 / hash 違反 / timeout / parse 失敗。
+- 失敗分類: 空出力 / schema 違反 / id 不一致 / hash 違反 / timeout / parse 失敗 /
+  relay / delivery-unknown。
   close 前に失敗一覧を必ず CEO に提示 (偽装成功防止)
 
 ## 7. seats.json (簡素化)

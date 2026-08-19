@@ -29,6 +29,11 @@ class ProcessTree:
     def __init__(self) -> None:
         self._job = None
 
+    @property
+    def managed(self) -> bool:
+        """子孫を構造的に回収できる管理境界が成立しているか。"""
+        return os.name != "nt" or self._job is not None
+
     def spawn_kwargs(self) -> dict:
         """Popen に渡す追加引数 (POSIX のみプロセスグループを分離する)。"""
         return {} if os.name == "nt" else {"start_new_session": True}
@@ -77,7 +82,11 @@ class ProcessTree:
 
             info = _ExtLimit()
             info.BasicLimitInformation.LimitFlags = 0x2000  # KILL_ON_JOB_CLOSE
-            k32.SetInformationJobObject(job, 9, ctypes.byref(info), ctypes.sizeof(info))
+            if not k32.SetInformationJobObject(
+                job, 9, ctypes.byref(info), ctypes.sizeof(info)
+            ):
+                k32.CloseHandle(job)
+                return
             handle = int(proc._handle)  # type: ignore[attr-defined]
             if k32.AssignProcessToJobObject(job, handle):
                 self._job = job
@@ -94,12 +103,15 @@ class ProcessTree:
                     ["taskkill", "/T", "/F", "/PID", str(pid)],
                     check=False, shell=False, capture_output=True, timeout=10,
                 )
-            except (OSError, subprocess.SubprocessError):
+            except Exception:
+                # 回収は best effort。taskkill 自体やテスト用 Popen shim の例外で
+                # 親プロセスの terminate 経路まで飛ばしてはいけない。
                 pass
             return
         try:
             os.killpg(os.getpgid(pid), signal.SIGKILL)  # POSIX: グループごと
-        except (OSError, ProcessLookupError):
+        except Exception:
+            # killpg が失敗しても呼び出し元は親の terminate/kill を続ける。
             pass
 
     def close(self) -> None:

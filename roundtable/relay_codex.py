@@ -7,7 +7,8 @@ CEO 禁止は「CLI で AI を実行する」こと。ここは既存/起動し�
 前回の thread を持っていない。`seat["thread_ref"]` があれば turn/start の前に
 `thread/resume` を撃ち、**同じ席 (= CEO が読んでいるチャット) を使い続ける**。
 
-失敗時は RelayError を上げ、呼び出し側 (FallbackRelay) が Tier3 に縮退する。
+未送信が確定した失敗は RelayError を上げ、FallbackRelay が Tier3 に縮退する。
+turn/start の timeout は受理済みの可能性があるため DeliveryUnknownError とし、自動再送しない。
 """
 from __future__ import annotations
 
@@ -19,7 +20,7 @@ import threading
 import time
 from typing import Any
 
-from .relay import RelayError
+from .relay import DeliveryUnknownError, RelayError
 from .relay_process import ProcessTree
 
 
@@ -84,6 +85,24 @@ class UnsupportedCodexError(RelayError):
             f"codex {shown} < {need} (app-server が thread/start に応答しない版): "
             f"{path}. PATH 上に他の候補も無いので Tier1 は成立しない"
         )
+
+
+class RpcTimeoutError(RelayError):
+    """JSON-RPC の応答期限超過。送信済みかどうかは method ごとに判断する。"""
+
+    def __init__(self, method: str, timeout: float):
+        self.method = method
+        self.timeout = timeout
+        super().__init__(f"{method}: timeout after {timeout}s")
+
+
+class RpcResponseError(RelayError):
+    """app-server が返した構造化 JSON-RPC error。"""
+
+    def __init__(self, method: str, error: object):
+        self.method = method
+        self.error = error
+        super().__init__(f"{method}: {error}")
 
 
 def resolve_codex_binary(preferred: str | None = None) -> str:
@@ -152,6 +171,9 @@ class CodexAppServerRelay:
         self._q: queue.Queue[dict] = queue.Queue()
         self._id = 0
         self._reader: threading.Thread | None = None
+        self._stderr_reader: threading.Thread | None = None
+        self._rpc_lock = threading.Lock()
+        self._send_lock = threading.Lock()
         self._tree = _ProcessTree()
         # このプロセスの app-server が保持している thread id。
         # app-server は再起動のたびに thread を失うので、プロセスの寿命と一致させる。
@@ -187,6 +209,8 @@ class CodexAppServerRelay:
         self._tree.adopt(self._proc)  # 以後 close() で木ごと回収できる
         self._reader = threading.Thread(target=self._read_loop, daemon=True)
         self._reader.start()
+        self._stderr_reader = threading.Thread(target=self._drain_stderr, daemon=True)
+        self._stderr_reader.start()
         self._rpc(
             "initialize",
             {
@@ -213,6 +237,14 @@ class CodexAppServerRelay:
                 continue
             self._q.put(msg)
 
+    def _drain_stderr(self) -> None:
+        """stderr PIPE を常時 drain し、バッファ満杯による停止を防ぐ。"""
+        proc = self._proc
+        if proc is None or proc.stderr is None:
+            return
+        for _line in proc.stderr:
+            pass
+
     def _send_raw(self, obj: dict) -> None:
         assert self._proc and self._proc.stdin
         self._proc.stdin.write(json.dumps(obj, ensure_ascii=False) + "\n")
@@ -222,6 +254,11 @@ class CodexAppServerRelay:
         self._send_raw({"jsonrpc": "2.0", "method": method, "params": params})
 
     def _rpc(self, method: str, params: dict, timeout: float = 15) -> dict:
+        # 現行 transport は単一 queue。並行 RPC は互いの応答を奪うため直列化する。
+        with self._rpc_lock:
+            return self._rpc_locked(method, params, timeout)
+
+    def _rpc_locked(self, method: str, params: dict, timeout: float) -> dict:
         rid = self._next_id()
         self._send_raw({"jsonrpc": "2.0", "id": rid, "method": method, "params": params})
         deadline = time.time() + timeout
@@ -232,9 +269,13 @@ class CodexAppServerRelay:
                 continue
             if msg.get("id") == rid:
                 if "error" in msg:
-                    raise RelayError(f"{method}: {msg['error']}")
+                    raise RpcResponseError(method, msg["error"])
                 return msg.get("result") or {}
-        raise RelayError(f"{method}: timeout after {timeout}s")
+        raise RpcTimeoutError(method, timeout)
+
+    @staticmethod
+    def _is_thread_not_found(exc: RpcResponseError) -> bool:
+        return "thread not found" in str(exc.error).lower()
 
     def _thread_params(self) -> dict[str, Any]:
         """thread/start と thread/resume で共通の安全パラメータ。
@@ -296,22 +337,50 @@ class CodexAppServerRelay:
         return thread_id
 
     def send(self, seat: dict, text: str) -> str:
+        # 同一 relay の二重 spawn / thread 操作競合を構造的に防ぐ。
+        with self._send_lock:
+            return self._send_locked(seat, text)
+
+    def _send_locked(self, seat: dict, text: str) -> str:
         try:
             self._ensure()
             thread_id = seat.get("thread_ref")
             if thread_id:
                 # 2 ラウンド目以降。seats.json に残った thread_ref を同じ席として使い続ける。
-                self._resume_thread(thread_id)
+                try:
+                    self._resume_thread(thread_id)
+                except RpcResponseError as exc:
+                    if self._is_thread_not_found(exc):
+                        # 削除・別 profile の stale 席だけは一度だけ新規作成して自己回復する。
+                        seat.pop("thread_ref", None)
+                        thread_id = self._start_thread(seat)
+                    else:
+                        raise DeliveryUnknownError(
+                            f"thread/resume continuity unknown; automatic Tier3 fallback disabled: {exc}"
+                        ) from exc
+                except RelayError as exc:
+                    # resume timeout 等では既存席を利用可能か判定できない。新規席や
+                    # Tier3へ自動分岐すると、CEOが見る会話履歴を分裂させる。
+                    raise DeliveryUnknownError(
+                        f"thread/resume continuity unknown; automatic Tier3 fallback disabled: {exc}"
+                    ) from exc
             else:
                 thread_id = self._start_thread(seat)
-            self._rpc(
-                "turn/start",
-                {
-                    "threadId": thread_id,
-                    "input": [{"type": "text", "text": text}],
-                },
-                timeout=TIMEOUT_TURN_START,
-            )
+            try:
+                self._rpc(
+                    "turn/start",
+                    {
+                        "threadId": thread_id,
+                        "input": [{"type": "text", "text": text}],
+                    },
+                    timeout=TIMEOUT_TURN_START,
+                )
+            except Exception as exc:
+                # request 書込開始後は、timeout・BrokenPipe・応答errorのいずれも
+                # app-server が受理済みかをクライアント側から証明できない。
+                raise DeliveryUnknownError(
+                    f"turn/start delivery unknown; automatic Tier3 fallback disabled: {exc}"
+                ) from exc
             return "tier1-sent"
         except RelayError:
             self.close()
@@ -339,6 +408,9 @@ class CodexAppServerRelay:
         if proc is None or proc.poll() is not None:
             tree.close()
             return
+        if not tree.managed:
+            # Windows Job Object の設定/割当失敗時も子孫を先に回収する。
+            tree.kill_tree(proc.pid)
         try:
             if proc.stdin:
                 proc.stdin.close()
