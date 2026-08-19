@@ -6,6 +6,12 @@
    "round": 1,
    "state": "merged",
    "detail": ""
+  },
+  "239d4fe6f985": {
+   "participant": "codex",
+   "round": 2,
+   "state": "prepared",
+   "detail": ""
   }
  },
  "human_actions": [
