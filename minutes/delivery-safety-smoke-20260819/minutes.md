@@ -1,7 +1,7 @@
 ---
 topic: Tier1配送安全性の実測
 status: open
-round: 2
+round: 3
 participants: [codex]
 verdict:
 ---
