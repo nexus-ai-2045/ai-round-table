@@ -1,6 +1,13 @@
 {
  "round": 1,
- "invocations": {},
+ "invocations": {
+  "fbd7970ceec6": {
+   "participant": "codex",
+   "round": 1,
+   "state": "prepared",
+   "detail": ""
+  }
+ },
  "human_actions": [
   {
    "id": "e062ef85b204",
