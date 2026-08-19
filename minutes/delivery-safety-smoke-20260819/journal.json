@@ -4,7 +4,7 @@
   "fbd7970ceec6": {
    "participant": "codex",
    "round": 1,
-   "state": "output-received",
+   "state": "validated",
    "detail": ""
   }
  },
