@@ -169,8 +169,11 @@ gemini-cli / claude は `--acp` 実装済み、Grok Build は ACP 対応、agy �
 
 ```
 prepared → delivered(tier 記録) → output-received → validated → merged / failed
+          └→ delivery-unknown → output-received / failed
 ```
 
+- `delivery-unknown` は再送禁止だが終端ではない。後から成果物が現れた場合は同じ
+  invocation を検証・回収し、二重送信せずに状態を前進させる。
 - Tier3 の delivered は「クリップボード搬出済み」であり席着信は未知 — 未着のまま
   timeout したら「未貼り付け?」として CEO に確認 (自動再送しない)
 - merge は invocation_id で冪等。round は指名バッチ全 merge で +1 (機械更新)

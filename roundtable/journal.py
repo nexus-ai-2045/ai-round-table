@@ -2,6 +2,7 @@
 
 状態遷移 (DESIGN v6 §6 + v0.2 軸 C detector):
     prepared → delivered → output-received → validated → merged / failed
+                 └→ delivery-unknown → output-received / failed
 前進のみ。merged / failed からの逆行は ValueError。
 
 並行 dispatch での記録消失対策 (2026-08-07 実測バグ / 診断 fix_options A を採用):
@@ -18,7 +19,15 @@ from . import ledger
 from .filelock import FileLock
 from .paths import TopicPaths
 
-STATES = {"prepared", "delivered", "output-received", "validated", "merged", "failed"}
+STATES = {
+    "prepared",
+    "delivered",
+    "delivery-unknown",
+    "output-received",
+    "validated",
+    "merged",
+    "failed",
+}
 
 # 軸 C: 前進のみ (ジャンプ可) / 逆行禁止。同一状態は detail 更新を許可。
 # failed は任意の非終端から到達可。merged / failed は終端。
@@ -137,6 +146,12 @@ def _transition_allowed(current: str, new: str) -> bool:
         return True
     if current in {"merged", "failed"}:
         return False  # 終端からの逆行・離脱は不可
+    if current == "delivery-unknown":
+        # 送達は未確定でも、既送信だった場合の成果物は後から回収できる。
+        return new in {"output-received", "validated", "merged", "failed"}
+    if new == "delivery-unknown":
+        # dispatcher が再送を止めるための一時状態。未送信確定ではない。
+        return current in {"prepared", "delivered"}
     if new == "failed":
         return True
     if current not in _FORWARD_INDEX or new not in _FORWARD_INDEX:

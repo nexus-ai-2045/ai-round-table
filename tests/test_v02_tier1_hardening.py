@@ -10,7 +10,9 @@ import threading
 import pytest
 
 from roundtable import relay as relay_mod
+from roundtable import watcher
 from roundtable.cli import main
+from roundtable.journal import Journal
 from roundtable.paths import ensure_topic
 from roundtable.relay import DeliveryUnknownError
 from roundtable.relay_codex import (
@@ -317,6 +319,41 @@ def test_cli_preserves_thread_ref_for_delivery_unknown(tmp_path, monkeypatch):
     assert "delivery-unknown" in json.loads(
         tp.journal.read_text(encoding="utf-8")
     )["invocations"][result["invocation"]]["detail"]
+
+
+def test_delivery_unknown_can_collect_late_output(tmp_path, monkeypatch):
+    """送達不明は再送を止めるが、既送信だった成果物の回収は妨げない。"""
+    class AmbiguousRelay:
+        tier = 1
+
+        def send(self, seat, text):
+            seat["thread_ref"] = "thr_ambiguous"
+            raise DeliveryUnknownError("turn may already be running")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("roundtable.cli.get_relay", lambda *a, **k: AmbiguousRelay())
+    main(["new-topic", "t1", "--topic", "X", "--participants", "codex", "--root", str(tmp_path)])
+    assert main(["dispatch", "t1", "--participant", "codex", "--tier", "1", "--timeout", "0.1", "--root", str(tmp_path)]) == 1
+
+    tp = ensure_topic(tmp_path, "t1")
+    result = json.loads(tp.last_result.read_text(encoding="utf-8"))
+    inv = result["invocation"]
+    (tp.scratch / f"{inv}.json").write_text(
+        json.dumps(
+            {
+                "invocation_id": inv,
+                "participant": "codex",
+                "opinion": "後着した成果物",
+                "claims": [{"claim": "A", "evidence_type": "argument", "evidence": "B"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert watcher.collect(tp, Journal.load(tp), inv, "codex", timeout_s=1)["ok"]
+    assert Journal.load(tp).is_merged(inv)
 
 
 def test_get_relay_passes_cwd_to_tier1(monkeypatch):

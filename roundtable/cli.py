@@ -131,7 +131,7 @@ def _cmd_dispatch(args) -> int:
                 seat["tier"] = relay.tier
                 seats[seat_key] = seat
                 save_seats(tp, seats)
-                journal.set_state(inv, "failed", f"delivery-unknown: {exc}")
+                journal.set_state(inv, "delivery-unknown", f"delivery-unknown: {exc}")
                 _write_last_result(
                     tp,
                     {
