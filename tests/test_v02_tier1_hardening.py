@@ -6,6 +6,7 @@
 import json
 import subprocess
 import threading
+from pathlib import Path
 
 import pytest
 
@@ -196,6 +197,23 @@ def test_turn_transport_error_is_delivery_unknown(monkeypatch):
         relay.send({"topic": "t1"}, "same invocation")
 
 
+def test_turn_rpc_rejection_remains_definitive_relay_error(monkeypatch):
+    """明示的なJSON-RPC拒否は送達不明ではなく、Tier3縮退可能な確定失敗。"""
+    relay = CodexAppServerRelay(cwd="/tmp/topic")
+    monkeypatch.setattr(relay, "_ensure", lambda: None)
+
+    def fake_rpc(method, params, timeout=15):
+        if method == "thread/start":
+            return {"thread": {"id": "thr_1"}}
+        if method == "turn/start":
+            raise RpcResponseError(method, {"code": -32602, "message": "invalid params"})
+        return {}
+
+    monkeypatch.setattr(relay, "_rpc", fake_rpc)
+    with pytest.raises(RpcResponseError):
+        relay.send({"topic": "t1"}, "same invocation")
+
+
 def test_stale_thread_ref_is_recreated_once(monkeypatch):
     relay = CodexAppServerRelay(cwd="/tmp/topic")
     monkeypatch.setattr(relay, "_ensure", lambda: None)
@@ -354,6 +372,78 @@ def test_delivery_unknown_can_collect_late_output(tmp_path, monkeypatch):
 
     assert watcher.collect(tp, Journal.load(tp), inv, "codex", timeout_s=1)["ok"]
     assert Journal.load(tp).is_merged(inv)
+
+
+@pytest.mark.parametrize("async_dispatch", [False, True])
+def test_delivery_unknown_waits_for_late_output_before_closing(
+    tmp_path, monkeypatch, async_dispatch
+):
+    """送達不明ならCLIを維持し、後着成果物を回収してから席を閉じる。"""
+    main([
+        "new-topic", "t1", "--topic", "X", "--participants", "codex",
+        "--root", str(tmp_path),
+    ])
+    tp = ensure_topic(tmp_path, "t1")
+
+    class AmbiguousRelay:
+        tier = 1
+
+        def __init__(self):
+            self.timer = None
+            self.closed_after_output = False
+
+        def send(self, seat, text):
+            seat["thread_ref"] = "thr_ambiguous"
+            inv = next(iter(Journal.load(tp).data["invocations"]))
+
+            def emit_output():
+                (tp.scratch / f"{inv}.json").write_text(
+                    json.dumps(
+                        {
+                            "invocation_id": inv,
+                            "participant": "codex",
+                            "opinion": "送達不明後に完了した成果物",
+                            "claims": [
+                                {
+                                    "claim": "A",
+                                    "evidence_type": "argument",
+                                    "evidence": "B",
+                                }
+                            ],
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+            self.timer = threading.Timer(0.05, emit_output)
+            self.timer.start()
+            raise DeliveryUnknownError("turn may already be running")
+
+        def close(self):
+            self.closed_after_output = any(tp.scratch.glob("*.json"))
+            if self.timer is not None:
+                self.timer.cancel()
+
+    relay = AmbiguousRelay()
+    monkeypatch.setattr("roundtable.cli.get_relay", lambda *a, **k: relay)
+    args = [
+        "dispatch", "t1", "--participant", "codex", "--tier", "1",
+        "--timeout", "1", "--root", str(tmp_path),
+    ]
+    if async_dispatch:
+        args.append("--async")
+
+    assert main(args) == 0
+    assert relay.closed_after_output
+    assert Journal.load(tp).is_merged(next(iter(Journal.load(tp).data["invocations"])))
+
+
+def test_protocol_lists_delivery_unknown_as_machine_reason():
+    protocol = (Path(__file__).parents[1] / "docs" / "PROTOCOL.md").read_text(
+        encoding="utf-8"
+    )
+    assert "| `delivery-unknown` |" in protocol
+    assert "`delivery-unknown`" in protocol.split("### CLI の exit code", 1)[1]
 
 
 def test_get_relay_passes_cwd_to_tier1(monkeypatch):

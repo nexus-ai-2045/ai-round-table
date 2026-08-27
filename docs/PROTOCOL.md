@@ -133,7 +133,8 @@ Desktop socket 不在なら **実席は Tier3 貼付が本線** (2026-08-07 実�
 | `schema` | 出力契約 (invocation_id/participant/opinion/claims) を満たさない | 違反理由をそのまま提示 |
 | `id-mismatch` | invocation_id または participant が発行時と不一致 (貼り間違い等) | 別 invocation の混入として提示 |
 | `tampered` | minutes.md が hash 証跡と不一致 (dispatcher 外で書き換えられた) | dispatcher 外での改変の可能性を明示、CEO 判断待ち |
-| `relay` | 席への送信前に確定失敗した、または送達成否が不明 | detail を提示。`delivery unknown` を含む場合は席を確認するまで再送しない |
+| `relay` | 席への送信前に確定失敗した | detail を提示。未送信が確定している場合だけ縮退を検討する |
+| `delivery-unknown` | 席が受理した可能性があり送達成否を確定できない | 同じ relay で成果物を待つ。自動再送せず、後着成果物は同じ invocation として回収する |
 
 いずれも journal に記録され、`close` 時の失敗一覧に必ず現れる (偽装成功防止)。
 
@@ -146,7 +147,7 @@ dispatcher 経由の追記は何本入っても一致する。出たら本当に
 | code | 意味 | `last-result.json` の `reason` |
 |---|---|---|
 | 0 | 成功 | `merged` / `async` |
-| 1 | 上表の失敗分類 | `timeout` / `parse` / `schema` / `id-mismatch` / `tampered` / `relay` |
+| 1 | 上表の失敗分類 | `timeout` / `parse` / `schema` / `id-mismatch` / `tampered` / `relay` / `delivery-unknown` |
 | 2 | 引数エラー (未知 invocation 等) | (書かれない) |
 | 3 | 改ざん検知 (journal / seats / minutes が証跡と不一致) | (書かれない / stderr に提示) |
 | 4 | 状態ファイルのロックを取得できなかった | `lock` |

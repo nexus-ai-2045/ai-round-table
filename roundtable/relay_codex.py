@@ -375,13 +375,20 @@ class CodexAppServerRelay:
                     },
                     timeout=TIMEOUT_TURN_START,
                 )
+            except RpcResponseError:
+                # app-server が構造化 error を返した = request の失敗は確定している。
+                # 送達不明へ包まず RelayError のまま Tier3 縮退経路へ返す。
+                raise
             except Exception as exc:
-                # request 書込開始後は、timeout・BrokenPipe・応答errorのいずれも
-                # app-server が受理済みかをクライアント側から証明できない。
+                # response が無い timeout・transport 切断は、app-server が受理済みかを
+                # クライアント側から証明できない。
                 raise DeliveryUnknownError(
                     f"turn/start delivery unknown; automatic Tier3 fallback disabled: {exc}"
                 ) from exc
             return "tier1-sent"
+        except DeliveryUnknownError:
+            # turn が動作中かもしれない。CLI の回収待ちが終わるまで process tree を保つ。
+            raise
         except RelayError:
             self.close()
             raise

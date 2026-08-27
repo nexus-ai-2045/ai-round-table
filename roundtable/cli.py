@@ -104,6 +104,7 @@ def _cmd_dispatch(args) -> int:
 
     tier = args.tier
     relay = None
+    close_after_delivery_unknown = False
     try:
         if args.no_clipboard and tier == 3:
             # 明示的に搬出せず、packet を stdout のみ
@@ -144,10 +145,23 @@ def _cmd_dispatch(args) -> int:
                     },
                 )
                 print(
-                    f"\n[failed] invocation: {inv} / reason: delivery-unknown / {exc}\n"
-                    "[stop] 席が受理済みの可能性があるため、自動再送しません。"
+                    f"\n[delivery-unknown] invocation: {inv} / {exc}\n"
+                    "[wait] 席が受理済みの可能性があるため、自動再送せず成果物を待ちます。"
                 )
-                return 1
+                close_after_delivery_unknown = True
+                return _collect_one(
+                    tp,
+                    journal,
+                    inv,
+                    args.participant,
+                    args.timeout,
+                    delivered=True,
+                    preserve_delivery_unknown=True,
+                    failure_context={
+                        "detail": str(exc),
+                        "thread_ref": seat.get("thread_ref"),
+                    },
+                )
             except Exception as exc:  # Tier3 失敗など
                 journal.set_state(inv, "failed", f"relay: {exc}")
                 _write_last_result(
@@ -191,9 +205,9 @@ def _cmd_dispatch(args) -> int:
 
         return _collect_one(tp, journal, inv, args.participant, args.timeout, delivered)
     finally:
-        # `--async` は「搬出だけして席を動かしたまま返る」契約なので閉じない。
-        # それ以外は collect が終わった後なので、ここが唯一の回収点になる。
-        if relay is not None and not args.async_dispatch:
+        # 通常の `--async` は「搬出だけして席を動かしたまま返る」契約なので閉じない。
+        # delivery-unknown だけは async でも同じプロセスで回収を待った後に閉じる。
+        if relay is not None and (not args.async_dispatch or close_after_delivery_unknown):
             _close_relay(relay)
 
 
@@ -205,8 +219,24 @@ def _leftover_tmps(tp) -> list[str]:
         return []
 
 
-def _collect_one(tp, journal, inv, participant, timeout_s, delivered: bool) -> int:
-    result = watcher.collect(tp, journal, inv, participant, timeout_s=timeout_s)
+def _collect_one(
+    tp,
+    journal,
+    inv,
+    participant,
+    timeout_s,
+    delivered: bool,
+    preserve_delivery_unknown: bool = False,
+    failure_context: dict | None = None,
+) -> int:
+    result = watcher.collect(
+        tp,
+        journal,
+        inv,
+        participant,
+        timeout_s=timeout_s,
+        preserve_delivery_unknown=preserve_delivery_unknown,
+    )
     if result["ok"]:
         journal.advance_round_if_complete(minutes.parse_participants(tp))
         minutes.sync_round(tp, journal.round_no)
@@ -240,6 +270,8 @@ def _collect_one(tp, journal, inv, participant, timeout_s, delivered: bool) -> i
         payload["tmp"] = result["tmp"]
     if result.get("detail"):
         payload["detail"] = result["detail"]
+    if failure_context:
+        payload.update(failure_context)
     _write_last_result(tp, payload)
     print(f"\n[failed] invocation: {inv} / reason: {reason}")
     if reason == "stalled-tmp":
