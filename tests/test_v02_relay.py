@@ -1,5 +1,13 @@
 """v0.2 relay contract: interface, Tier3 default, Codex Tier1 fallback."""
-from roundtable.relay import FallbackRelay, RelayError, get_relay, seats_path
+import pytest
+
+from roundtable.relay import (
+    DeliveryUnknownError,
+    FallbackRelay,
+    RelayError,
+    get_relay,
+    seats_path,
+)
 from roundtable.relay_tier3 import Tier3Relay
 
 
@@ -37,6 +45,34 @@ def test_tier1_failure_falls_back_to_tier3():
     assert result.startswith("fallback-tier3:")
     assert calls and calls[0][0] == "tier3"
     assert r.tier == 3  # 縮退後は Tier3 として記録
+
+
+def test_delivery_unknown_never_falls_back_to_tier3():
+    calls = []
+
+    class Ambiguous:
+        tier = 1
+
+        def send(self, seat, text):
+            raise DeliveryUnknownError("turn may already be running")
+
+        def poll(self, seat):
+            return None
+
+    class CaptureTier3:
+        tier = 3
+
+        def send(self, seat, text):
+            calls.append(text)
+            return "delivered"
+
+        def poll(self, seat):
+            return None
+
+    relay = FallbackRelay(Ambiguous(), CaptureTier3())
+    with pytest.raises(DeliveryUnknownError):
+        relay.send({}, "same invocation")
+    assert calls == []
 
 
 def test_get_relay_tier1_wraps_with_fallback():

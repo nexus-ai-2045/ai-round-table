@@ -86,6 +86,7 @@ def collect(
     poll_s: float = 2.0,
     clock=time,
     tmp_stable_s: float = 1.0,
+    preserve_delivery_unknown: bool = False,
 ) -> dict:
     """invocation の出力を待ち、検証してから議事録へ merge する。
 
@@ -115,6 +116,10 @@ def collect(
             continue
         # --- timeout 到達。ここで .tmp を見る (見ないと偽陰性になる) ---
         if not tmp.exists():
+            if preserve_delivery_unknown:
+                # turn/start の応答を失った呼び出しは、後から成果物が届きうる。
+                # failed 終端へ進めず、明示 collect で回収できる状態を保つ。
+                return {"ok": False, "reason": "delivery-unknown"}
             journal.set_state(inv_id, "failed", "timeout")
             return {"ok": False, "reason": "timeout"}
         candidate, why = _load_tmp_candidate(tmp, inv_id, participant, clock, tmp_stable_s)

@@ -3,14 +3,24 @@
 いずれも「実 CLI を起動せずに、危険な既定に戻ったら落ちる」ことを目的にする。
 実プロセスを起こさないので CI で安全に回せる。
 """
+import json
 import subprocess
+import threading
+from pathlib import Path
 
 import pytest
 
 from roundtable import relay as relay_mod
+from roundtable import watcher
 from roundtable.cli import main
+from roundtable.journal import Journal
 from roundtable.paths import ensure_topic
-from roundtable.relay_codex import CodexAppServerRelay
+from roundtable.relay import DeliveryUnknownError
+from roundtable.relay_codex import (
+    CodexAppServerRelay,
+    RpcResponseError,
+    RpcTimeoutError,
+)
 
 
 class _FakeProc:
@@ -122,10 +132,318 @@ def test_close_kills_process_tree_when_terminate_fails(monkeypatch):
     assert relay._proc is None
 
 
+def test_close_kills_tree_when_windows_job_is_unmanaged():
+    """Job Object が成立しない環境では親の正常終了を待つ前に taskkill 相当を通す。"""
+    proc = _FakeProc(alive_after_terminate=False)
+
+    class UnmanagedTree:
+        managed = False
+
+        def __init__(self):
+            self.killed = []
+            self.closed = False
+
+        def kill_tree(self, pid):
+            self.killed.append(pid)
+
+        def close(self):
+            self.closed = True
+
+    tree = UnmanagedTree()
+    relay = CodexAppServerRelay()
+    relay._proc = proc
+    relay._tree = tree
+    relay.close()
+    assert tree.killed == [proc.pid]
+    assert tree.closed
+
+
 def test_close_is_idempotent():
     relay = CodexAppServerRelay()
     relay.close()
     relay.close()  # 二度目でも例外を出さない
+
+
+def test_turn_timeout_is_delivery_unknown(monkeypatch):
+    relay = CodexAppServerRelay(cwd="/tmp/topic")
+    monkeypatch.setattr(relay, "_ensure", lambda: None)
+
+    def fake_rpc(method, params, timeout=15):
+        if method == "thread/start":
+            return {"thread": {"id": "thr_1"}}
+        if method == "turn/start":
+            raise RpcTimeoutError(method, timeout)
+        return {}
+
+    monkeypatch.setattr(relay, "_rpc", fake_rpc)
+    with pytest.raises(DeliveryUnknownError):
+        relay.send({"topic": "t1"}, "same invocation")
+
+
+def test_turn_transport_error_is_delivery_unknown(monkeypatch):
+    """request書込中の切断も受理済みを否定できないので自動再送しない。"""
+    relay = CodexAppServerRelay(cwd="/tmp/topic")
+    monkeypatch.setattr(relay, "_ensure", lambda: None)
+
+    def fake_rpc(method, params, timeout=15):
+        if method == "thread/start":
+            return {"thread": {"id": "thr_1"}}
+        if method == "turn/start":
+            raise BrokenPipeError("server closed after read")
+        return {}
+
+    monkeypatch.setattr(relay, "_rpc", fake_rpc)
+    with pytest.raises(DeliveryUnknownError):
+        relay.send({"topic": "t1"}, "same invocation")
+
+
+def test_turn_rpc_rejection_remains_definitive_relay_error(monkeypatch):
+    """明示的なJSON-RPC拒否は送達不明ではなく、Tier3縮退可能な確定失敗。"""
+    relay = CodexAppServerRelay(cwd="/tmp/topic")
+    monkeypatch.setattr(relay, "_ensure", lambda: None)
+
+    def fake_rpc(method, params, timeout=15):
+        if method == "thread/start":
+            return {"thread": {"id": "thr_1"}}
+        if method == "turn/start":
+            raise RpcResponseError(method, {"code": -32602, "message": "invalid params"})
+        return {}
+
+    monkeypatch.setattr(relay, "_rpc", fake_rpc)
+    with pytest.raises(RpcResponseError):
+        relay.send({"topic": "t1"}, "same invocation")
+
+
+def test_stale_thread_ref_is_recreated_once(monkeypatch):
+    relay = CodexAppServerRelay(cwd="/tmp/topic")
+    monkeypatch.setattr(relay, "_ensure", lambda: None)
+    sent = []
+
+    def fake_rpc(method, params, timeout=15):
+        sent.append((method, dict(params)))
+        if method == "thread/resume":
+            raise RpcResponseError(method, {"message": "thread not found"})
+        if method == "thread/start":
+            return {"thread": {"id": "thr_new"}}
+        return {}
+
+    monkeypatch.setattr(relay, "_rpc", fake_rpc)
+    seat = {"topic": "t1", "thread_ref": "thr_dead"}
+    assert relay.send(seat, "packet") == "tier1-sent"
+    assert seat["thread_ref"] == "thr_new"
+    assert [m for m, _ in sent].count("thread/resume") == 1
+    assert [m for m, _ in sent].count("thread/start") == 1
+
+
+def test_resume_timeout_stops_without_starting_new_seat(monkeypatch):
+    relay = CodexAppServerRelay(cwd="/tmp/topic")
+    monkeypatch.setattr(relay, "_ensure", lambda: None)
+    sent = []
+
+    def fake_rpc(method, params, timeout=15):
+        sent.append(method)
+        if method == "thread/resume":
+            raise RpcTimeoutError(method, timeout)
+        return {}
+
+    monkeypatch.setattr(relay, "_rpc", fake_rpc)
+    seat = {"topic": "t1", "thread_ref": "thr_existing"}
+    with pytest.raises(DeliveryUnknownError):
+        relay.send(seat, "packet")
+    assert seat["thread_ref"] == "thr_existing"
+    assert sent == ["thread/resume"]
+
+
+def test_rpc_and_send_calls_are_serialized():
+    relay = CodexAppServerRelay(cwd="/tmp/topic")
+    assert isinstance(relay._rpc_lock, type(threading.Lock()))
+    assert isinstance(relay._send_lock, type(threading.Lock()))
+
+
+def test_send_lock_functionally_serializes_calls(monkeypatch):
+    relay = CodexAppServerRelay(cwd="/tmp/topic")
+    guard = threading.Lock()
+    active = 0
+    peak = 0
+
+    def fake_send_locked(seat, text):
+        nonlocal active, peak
+        with guard:
+            active += 1
+            peak = max(peak, active)
+        threading.Event().wait(0.02)
+        with guard:
+            active -= 1
+        return text
+
+    monkeypatch.setattr(relay, "_send_locked", fake_send_locked)
+
+    start = threading.Barrier(3)
+    results = []
+
+    def worker(text):
+        start.wait()
+        results.append(relay.send({}, text))
+
+    threads = [threading.Thread(target=worker, args=(str(i),)) for i in range(2)]
+    for thread in threads:
+        thread.start()
+    start.wait()
+    for thread in threads:
+        thread.join(timeout=2)
+    assert all(not thread.is_alive() for thread in threads)
+    assert sorted(results) == ["0", "1"]
+    assert peak == 1
+
+
+def test_stderr_drain_consumes_large_stream():
+    relay = CodexAppServerRelay(cwd="/tmp/topic")
+
+    class Proc:
+        stderr = (f"diagnostic {i}\n" for i in range(100_000))
+
+    relay._proc = Proc()
+    thread = threading.Thread(target=relay._drain_stderr)
+    thread.start()
+    thread.join(timeout=5)
+    assert not thread.is_alive(), "stderr reader が大量出力をdrainできない"
+
+
+def test_cli_preserves_thread_ref_for_delivery_unknown(tmp_path, monkeypatch):
+    """送達不明の席参照と機械分類を保存し、再実行による席分裂を防ぐ。"""
+    class AmbiguousRelay:
+        tier = 1
+
+        def send(self, seat, text):
+            seat["thread_ref"] = "thr_ambiguous"
+            raise DeliveryUnknownError("turn may already be running")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("roundtable.cli.get_relay", lambda *a, **k: AmbiguousRelay())
+    main(["new-topic", "t1", "--topic", "X", "--participants", "codex",
+          "--root", str(tmp_path)])
+    rc = main(["dispatch", "t1", "--participant", "codex", "--tier", "1",
+               "--timeout", "0.1", "--root", str(tmp_path)])
+
+    tp = ensure_topic(tmp_path, "t1")
+    result = json.loads(tp.last_result.read_text(encoding="utf-8"))
+    seats = relay_mod.load_seats(tp)
+    assert rc == 1
+    assert result["reason"] == "delivery-unknown"
+    assert result["thread_ref"] == "thr_ambiguous"
+    assert seats["rt/t1/codex"]["thread_ref"] == "thr_ambiguous"
+    assert "delivery-unknown" in json.loads(
+        tp.journal.read_text(encoding="utf-8")
+    )["invocations"][result["invocation"]]["detail"]
+
+
+def test_delivery_unknown_can_collect_late_output(tmp_path, monkeypatch):
+    """送達不明は再送を止めるが、既送信だった成果物の回収は妨げない。"""
+    class AmbiguousRelay:
+        tier = 1
+
+        def send(self, seat, text):
+            seat["thread_ref"] = "thr_ambiguous"
+            raise DeliveryUnknownError("turn may already be running")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("roundtable.cli.get_relay", lambda *a, **k: AmbiguousRelay())
+    main(["new-topic", "t1", "--topic", "X", "--participants", "codex", "--root", str(tmp_path)])
+    assert main(["dispatch", "t1", "--participant", "codex", "--tier", "1", "--timeout", "0.1", "--root", str(tmp_path)]) == 1
+
+    tp = ensure_topic(tmp_path, "t1")
+    result = json.loads(tp.last_result.read_text(encoding="utf-8"))
+    inv = result["invocation"]
+    (tp.scratch / f"{inv}.json").write_text(
+        json.dumps(
+            {
+                "invocation_id": inv,
+                "participant": "codex",
+                "opinion": "後着した成果物",
+                "claims": [{"claim": "A", "evidence_type": "argument", "evidence": "B"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert watcher.collect(tp, Journal.load(tp), inv, "codex", timeout_s=1)["ok"]
+    assert Journal.load(tp).is_merged(inv)
+
+
+@pytest.mark.parametrize("async_dispatch", [False, True])
+def test_delivery_unknown_waits_for_late_output_before_closing(
+    tmp_path, monkeypatch, async_dispatch
+):
+    """送達不明ならCLIを維持し、後着成果物を回収してから席を閉じる。"""
+    main([
+        "new-topic", "t1", "--topic", "X", "--participants", "codex",
+        "--root", str(tmp_path),
+    ])
+    tp = ensure_topic(tmp_path, "t1")
+
+    class AmbiguousRelay:
+        tier = 1
+
+        def __init__(self):
+            self.timer = None
+            self.closed_after_output = False
+
+        def send(self, seat, text):
+            seat["thread_ref"] = "thr_ambiguous"
+            inv = next(iter(Journal.load(tp).data["invocations"]))
+
+            def emit_output():
+                (tp.scratch / f"{inv}.json").write_text(
+                    json.dumps(
+                        {
+                            "invocation_id": inv,
+                            "participant": "codex",
+                            "opinion": "送達不明後に完了した成果物",
+                            "claims": [
+                                {
+                                    "claim": "A",
+                                    "evidence_type": "argument",
+                                    "evidence": "B",
+                                }
+                            ],
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+            self.timer = threading.Timer(0.05, emit_output)
+            self.timer.start()
+            raise DeliveryUnknownError("turn may already be running")
+
+        def close(self):
+            self.closed_after_output = any(tp.scratch.glob("*.json"))
+            if self.timer is not None:
+                self.timer.cancel()
+
+    relay = AmbiguousRelay()
+    monkeypatch.setattr("roundtable.cli.get_relay", lambda *a, **k: relay)
+    args = [
+        "dispatch", "t1", "--participant", "codex", "--tier", "1",
+        "--timeout", "1", "--root", str(tmp_path),
+    ]
+    if async_dispatch:
+        args.append("--async")
+
+    assert main(args) == 0
+    assert relay.closed_after_output
+    assert Journal.load(tp).is_merged(next(iter(Journal.load(tp).data["invocations"])))
+
+
+def test_protocol_lists_delivery_unknown_as_machine_reason():
+    protocol = (Path(__file__).parents[1] / "docs" / "PROTOCOL.md").read_text(
+        encoding="utf-8"
+    )
+    assert "| `delivery-unknown` |" in protocol
+    assert "`delivery-unknown`" in protocol.split("### CLI の exit code", 1)[1]
 
 
 def test_get_relay_passes_cwd_to_tier1(monkeypatch):

@@ -4,7 +4,8 @@
     poll(seat) -> str | None  # 席からの生出力 (未使用時は None; watcher が scratch を見る)
     close() -> None           # 席プロセス木の回収 (Tier3 は no-op)
 
-Tier1 障害時は Tier3 に縮退する。Tier2 (UI 自動化) へは自動昇格しない。
+Tier1 の「未送信が確定した障害」だけ Tier3 に縮退する。送達成否が不明なら停止して
+CEO 判断へ戻す。Tier2 (UI 自動化) へは自動昇格しない。
 
 `close` を契約に入れたのは 2026-08-07 レビュー H2 の指摘による: 実装は前からあったのに
 **本番の呼び出し元がゼロ**で、Windows では Job Object の KILL_ON_JOB_CLOSE が
@@ -25,6 +26,13 @@ from .paths import TopicPaths
 
 class RelayError(Exception):
     """relay 搬出に失敗した。呼び出し側は Tier3 縮退を検討する。"""
+
+
+class DeliveryUnknownError(RelayError):
+    """席が受理した可能性があり、自動再送してはいけない。
+
+    Tier3 へ自動縮退すると同じ invocation を二重投入しうるため、CEO 判断へ戻す。
+    """
 
 
 class Relay(Protocol):
@@ -99,7 +107,7 @@ def save_seats(tp: TopicPaths, data: dict) -> None:
 
 
 class FallbackRelay:
-    """preferred が失敗したら fallback に縮退するラッパ。Tier2 へは行かない。"""
+    """未送信が確定した失敗だけ fallback に縮退する。Tier2 へは行かない。"""
 
     def __init__(self, preferred: Relay, fallback: Relay):
         self._preferred = preferred
@@ -113,6 +121,9 @@ class FallbackRelay:
             self._active = self._preferred
             self.tier = self._preferred.tier
             return label
+        except DeliveryUnknownError:
+            # 「未送信」が確認できないため、自動 Tier3 は二重送信になる。
+            raise
         except RelayError as exc:
             label = self._fallback.send(seat, text)
             self._active = self._fallback
