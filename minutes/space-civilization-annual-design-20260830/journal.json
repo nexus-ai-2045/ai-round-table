@@ -20,6 +20,12 @@
    "action": "dispatch",
    "detail": "grok:90609a8d5bc9",
    "at": "2026-08-30T07:14:08.966419+00:00"
+  },
+  {
+   "id": "39d0549962c3",
+   "action": "tier3_paste_required",
+   "detail": "90609a8d5bc9",
+   "at": "2026-08-30T07:14:10.322983+00:00"
   }
  ],
  "conflicts": []
