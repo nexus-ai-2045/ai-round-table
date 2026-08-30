@@ -37,7 +37,7 @@ repo-preflight の検査結果と、それに対する人間の判断を記録�
 | 実パス | `docs/plans/2026-07-27-v0.1-implementation.md`（2 行） | 置換する |
 | 実パス | `minutes/2026-08-05-merge-guard-neutral/` の議事録と snapshot（各 2 行） | 置換する |
 | 実パス | `scratch/gpt-plan-review-packet.md`（2 行） | 置換する |
-| **原典の例示** | `references/codex-app-server-README.ja.md` / `.orig.md`（30 行超の `/Users/me/...`） | **触らない**。OpenAI の README に含まれる例であり、個人情報ではない |
+| **原典の例示** | `references/codex-app-server-README.ja.md` / `.orig.md`（Users 配下の例示パス 30 行超） | **触らない**。OpenAI の README に含まれる例であり、個人情報ではない |
 | 私的参照 | `docs/DESIGN.md` 冒頭の非公開 repo への参照（username は含まない） | 「非公開の内部調査」の明示に書き換える |
 | 履歴 | 上記の過去版 8 ファイル分 | 公開前に履歴書き換えが必要 |
 
