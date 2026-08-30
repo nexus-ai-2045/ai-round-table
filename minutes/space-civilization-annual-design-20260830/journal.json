@@ -4,8 +4,8 @@
   "90609a8d5bc9": {
    "participant": "grok",
    "round": 1,
-   "state": "prepared",
-   "detail": ""
+   "state": "delivered",
+   "detail": "tier3:delivered"
   }
  },
  "human_actions": [
