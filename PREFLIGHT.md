@@ -49,7 +49,12 @@ repo-preflight の検査結果と、それに対する人間の判断を記録�
 | `required_documents` | pass | README / LICENSE / SECURITY / CONTRIBUTING / PREFLIGHT を本 PR で commit |
 | `clean_worktree` | pass | 議事録の状態 3 ファイル（minutes.md / journal.json / seats.json）を commit し、ランタイム生成物（`minutes/*/scratch/` / `minutes/*/snapshot/` / `minutes/*/last-result.json`）は gitignore 化。commit なしで毎回上書きされる実装（cli / make_snapshot の atomic_write 直書き）のため、追跡すると恒久 dirty になることをコードで確認済み |
 | `ci_configuration` | 追加 | `.github/workflows/test.yml` を本 PR で追加（windows + ubuntu）。初実走 (run 33312907180) は両 OS とも **job 起動前に billing ブロックで fail** — private repo の Actions は課金しない方針のため、実走と緑確認は public 化時（無料枠）に行う |
-| `consistency_gate` | shadow 採用 | PR #9 で `.repo-preflight-consistency.json` を shadow モード採用済み |
+| `consistency_gate` | shadow 採用 | PR #9 で `.repo-preflight-consistency.json` を shadow モード採用済み。再走で `repository_consistency` pass |
+| `readme_release_design` | pass | 見出しを 目的と仕組み / 使い方（できること）/ 制約 に整え、情報設計ゲート pass |
+
+再走 (readiness_scan --intent publish) の残 blocked 要因は次の 3 種のみ:
+**git 履歴の書き換え**（personal_path_scan の history 15 commit + 原典例示 2 件は容認判断済み）/
+**CI 実走**（public 化時）/ **human_visual_review**（人間欄）。いずれも下の未了リストと対応。
 
 ## 未了（公開前に閉じること）
 
