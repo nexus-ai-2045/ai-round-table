@@ -6,6 +6,13 @@
 `nexus-ai-2045/ai-round-table` の独立AI席へ共有するための正本packetです。
 実装指示やmerge承認ではありません。レビュー回答は別ファイルとして回収します。
 
+roundtableでdispatchする前に、議題背景へこのrepository-relative pathを明記し、
+その後にsnapshotを生成してください。
+
+`minutes/space-civilization-annual-design-20260830/DESIGN_REVIEW_PACKET.md`
+
+参加席は`minutes.snapshot.md`内の上記pathを確認し、このファイルを全文読んでから回答します。
+
 ## 現在成立しているMVP
 
 現行MVPは、ローカルで実行可能な決定論的マルチエージェント・シミュレーターです。
@@ -96,12 +103,16 @@ carryのbefore/afterも記録し、replay可能にします。外部ショック
 代替案は、毎年協議するが状態commitは2026/2030/2035/2040だけにする方式です。
 これは低リスクですが、「1年ごとに状態が動く」という要求には弱いため第二候補です。
 
-## UI候補
+## UI・進行通知候補
 
 - 2026～2040の15年timeline
 - 初期提案中 → 相互反応中 → 再提案中 → 調停中 → 状態更新中 → 完了
 - 各年の支持・反対・修正を表示
-- API結果を一括表示せず、返却済み15年結果を順番に再生
+- サーバーはSSEまたはNDJSONで`year_started`、`interaction_completed`、
+  `year_completed`、`simulation_completed`を逐次送る
+- UIは受信済みeventだけを描画し、実計算中の年と完了済みの年を区別する
+- batch APIをfallbackとして残す場合は、計算完了後の表示を「結果replay」と明記し、
+  live計算のように見せない
 - `prefers-reduced-motion`ではアニメーションを抑止し、状態文字列は維持
 - 15年ボタンは横scrollまたはcompact year ticks
 
@@ -117,7 +128,25 @@ carryのbefore/afterも記録し、replay可能にします。外部ショック
 
 ## 回答形式
 
-以下を日本語Markdownで返してください。
+roundtableの収集契約に従い、回答全体は次のJSON envelopeに入れてください。
+以下の日本語Markdown templateは`opinion`文字列の中身です。
+
+```json
+{
+  "invocation_id": "dispatch packetに記載された値",
+  "participant": "grok",
+  "opinion": "下記templateを埋めた日本語Markdown",
+  "claims": [
+    {
+      "claim": "最重要の設計判断または反証",
+      "evidence_type": "argument",
+      "evidence": "packet内の契約に対する具体的根拠"
+    }
+  ]
+}
+```
+
+`claims`は1件以上必須です。`opinion`には次のtemplateを入れてください。
 
 ```text
 結論: GO / REVISE / NO-GO
