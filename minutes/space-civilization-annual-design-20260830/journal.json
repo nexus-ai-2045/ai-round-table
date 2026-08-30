@@ -1,6 +1,13 @@
 {
  "round": 1,
- "invocations": {},
+ "invocations": {
+  "90609a8d5bc9": {
+   "participant": "grok",
+   "round": 1,
+   "state": "prepared",
+   "detail": ""
+  }
+ },
  "human_actions": [
   {
    "id": "4121c9b0fd16",
