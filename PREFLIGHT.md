@@ -48,7 +48,7 @@ repo-preflight の検査結果と、それに対する人間の判断を記録�
 | `personal_path_scan` | pass | 実パス 8 行（6 箇所）をプレースホルダへ置換。追跡ファイルの残存 0 件を `git grep` で実測（原典例示の references/ は方針どおり除外） |
 | `required_documents` | pass | README / LICENSE / SECURITY / CONTRIBUTING / PREFLIGHT を本 PR で commit |
 | `clean_worktree` | pass | 議事録の状態 3 ファイル（minutes.md / journal.json / seats.json）を commit し、ランタイム生成物（`minutes/*/scratch/` / `minutes/*/snapshot/` / `minutes/*/last-result.json`）は gitignore 化。commit なしで毎回上書きされる実装（cli / make_snapshot の atomic_write 直書き）のため、追跡すると恒久 dirty になることをコードで確認済み |
-| `ci_configuration` | 追加 | `.github/workflows/test.yml` を本 PR で追加（windows + ubuntu、初実走）。緑の確認は下の未了リストで追跡 |
+| `ci_configuration` | 追加 | `.github/workflows/test.yml` を本 PR で追加（windows + ubuntu）。初実走 (run 33312907180) は両 OS とも **job 起動前に billing ブロックで fail** — private repo の Actions は課金しない方針のため、実走と緑確認は public 化時（無料枠）に行う |
 | `consistency_gate` | shadow 採用 | PR #9 で `.repo-preflight-consistency.json` を shadow モード採用済み |
 
 ## 未了（公開前に閉じること）
@@ -57,7 +57,9 @@ repo-preflight の検査結果と、それに対する人間の判断を記録�
 - [ ] git 履歴の書き換え（過去版 8 ファイルに残るため、ファイル修正だけでは消えない。
       force push を伴うため人間の明示判断で実施）
 - [x] `clean_worktree` を pass させる — 2026-08-30 完了（状態 3 ファイル commit + gitignore 3 行）
-- [ ] CI を追加して緑を確認する（workflow は本 PR で追加済み。緑の確認は CI 実走後にチェック）
+- [ ] CI の緑を確認する（workflow は本 PR で追加済み。private では Actions が billing 方針で
+      起動しないことを 2026-08-30 に実測 — 緑確認は public 化直後に行う。ローカルの代替実測:
+      Windows で 247 passed / POSIX は未実測のまま README の制限節に明記）
 - [ ] 版番号の確定（`pyproject.toml` は 0.2.0。v0.3 Phase 1–4 が着地済みのため、
       公開タグ希望 0.1.0 とは 2 版ずれ。要・人間判断）
 - [ ] `human_visual_review` の実施
