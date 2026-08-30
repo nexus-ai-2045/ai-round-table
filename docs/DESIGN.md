@@ -42,6 +42,7 @@ Codex / CC / Grok / Gemini を Windows 上でリンクし、人間 (CEO) が司�
 | D11 | **CC (ホストランタイム) は席にしない**。参加者は異ベンダーの AI で埋める | 独立性 > 頭数 (下記 D11 節) |
 | D12 | **改ざん証跡は git に一本化**。`.integrity/` witness 層は廃止。lock は排他専用として維持 | witness は grok 席から届く (実測) = 検知不成立。git は既にあり、より強い (下記 D12 節) |
 | D13 | **議事録 root は必ず git 管理下**。dispatcher が検査し、なければ init する。実運用の正本 root は本 repo の `minutes/` | CEO 要件「議事録は Git 管理」をツールが強制する。引数任せにしない |
+| D14 | **独立reviewとproduction実装を別workflowにする**。review成果物をstart gateとし、採否・root cause・ownership・receipt・fan-inはproduction integration ownerが持つ | ホストの非評価契約を壊さず、実装責任と単一PR closeoutを機械検査する (`docs/adr/0002-*.md`) |
 
 ## 3. アーキテクチャ
 

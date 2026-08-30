@@ -16,6 +16,7 @@ from .journal import Journal
 from .ledger import LedgerDirtyError
 from .paths import ensure_topic
 from .relay import DeliveryUnknownError, get_relay, load_seats, save_seats
+from .review_workflow import load_manifest, validate_live_git, validate_review_workflow
 
 
 def _write_last_result(tp, payload: dict) -> None:
@@ -374,6 +375,25 @@ def _cmd_close(args) -> int:
     return 0
 
 
+def _cmd_workflow_gate(args) -> int:
+    """独立review成果物を開始／fan-in gateとして検査する。"""
+    try:
+        data = load_manifest(Path(args.manifest))
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"[workflow-gate failed] manifest を読めない: {exc}")
+        return 1
+    errors = validate_review_workflow(data, phase=args.phase)
+    if not errors:
+        errors.extend(validate_live_git(data, phase=args.phase, repo=Path(args.repo)))
+    if errors:
+        print("[workflow-gate failed]")
+        for error in errors:
+            print(f"- {error}")
+        return 1
+    print(f"[workflow-gate ok] phase={args.phase} workflow_id={data['workflow_id']}")
+    return 0
+
+
 def _cmd_doctor(args) -> int:
     """Tier1 可否を短時間診断する。議題なしでも可。"""
     from .doctor import format_report, run_doctor
@@ -455,6 +475,12 @@ def _build_parser() -> argparse.ArgumentParser:
     p_doc.add_argument("--start-timeout", type=float, default=180.0, help="start プローブ秒")
     p_doc.add_argument("--json", action="store_true", help="JSON も追加出力")
     p_doc.set_defaults(func=_cmd_doctor)
+
+    p_wf = sub.add_parser("workflow-gate", help="review-to-implementation manifest を検査する")
+    p_wf.add_argument("manifest")
+    p_wf.add_argument("--phase", choices=("start", "fan-in"), required=True)
+    p_wf.add_argument("--repo", required=True)
+    p_wf.set_defaults(func=_cmd_workflow_gate)
 
     return parser
 
