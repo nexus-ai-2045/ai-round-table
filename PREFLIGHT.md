@@ -73,6 +73,39 @@ path 比較が壊れ、**既存 repo の中にネスト repo を init しうる*
 PR #14 で修正。開発機では 8.3 名が出ないため、ローカル 247 件緑のまま素通りしていた。
 **「ローカルで緑」は「実行環境で緑」ではない**ことの実例として残す。
 
+### 2026-09-01 / 目視レビューの下調べ（human_visual_review の材料）
+
+公開すると **94 ファイル**が外から読める。機械検査（secret_scan / worktree の
+personal_path_scan）はすべて pass しているので、残るのは「読まれて困らないか」の人間判断だけ。
+下調べとして、判断が要る箇所を実測で 3 点に絞った。
+**この節は下調べであって `human_visual_review` の完了ではない。**
+
+| # | 対象 | 実測 | 判断 |
+|---|---|---|---|
+| A | `minutes/space-civilization-annual-design-20260830/` | 4 files / 225 行。**別 private repo (space-civilization-choice) の 2026–2040 年シミュレーター設計**が丸ごと入っている | 未定 |
+| B | `scratch/` の 6 ファイル | 489 行。外部 AI へのレビュー依頼文と返答そのもの | 未定 |
+| C | 「CEO」という社内呼称 | **35 ファイル**（tests 9 / docs 9 / roundtable 8 / scratch 6 / scripts・minutes・adapters 各 1） | 未定 |
+
+補足:
+
+- **A** は構造上は正しい置き場所。`packet.build` は席へ `snapshot/minutes.snapshot.md` しか
+  渡さないので、席が読むレビュー対象文書は本 repo 内に無いと到達できない（file-backed 収集契約）。
+  ただし**この repo を公開すると別プロジェクトの設計が一緒に出る**。分離するなら
+  「席に届ける仕組み」の方を先に決める必要がある
+- **B** は依頼の書き方がそのまま残る。秘匿情報は無いが、作業の生々しさは残る
+- **C** は外部読者には文脈のない語として映る。残す判断でも実害は無いが、出現数は多い
+- `cmux` は `docs/DESIGN.md` の「cmux 非依存」1 箇所のみ。無害
+- `minutes/` のうち席の生の発話が載っているのは `delivery-safety-smoke-20260819` と
+  `tier1-final` の 2 件
+
+### 2026-09-01 / gitleaks の誤検知（履歴 scan 限定）
+
+履歴全体を scan すると `references/codex-app-server-README.*` で `generic-api-key` が
+2 箇所ヒットする。中身は OpenAI の README にある JSON 例の `idempotencyKey` で
+資格情報ではない。差分 scan では出ないため公開準備の最終段まで気付かなかった。
+**公開後は第三者が全履歴を scan できる**ので、判断を `.gitleaks.toml` の allowlist として
+repo に残した（PR #17）。除外は path と regex の AND 条件に絞ってある。
+
 ## 未了（公開前に閉じること）
 
 - [x] 実パス 6 箇所（8 行）の置換 — 2026-08-30 完了。`git grep` で残存 0 件を実測
@@ -86,7 +119,8 @@ PR #14 で修正。開発機では 8.3 名が出ないため、ローカル 247 
       合わせた。起草時の「公開タグ希望 0.1.0」は 2 版ずれのため撤回）。数字は
       `roundtable/__version__` の 1 箇所に寄せ、pyproject との一致と relay の直書き禁止を
       `tests/test_version_consistency.py` が機械検査する
-- [ ] `human_visual_review` の実施
+- [ ] `human_visual_review` の実施 — 下調べは 2026-09-01 に完了（上記の A / B / C の 3 判断に
+      絞り込み済み）。残るのは人間が A・B・C を決めることだけ
 - [ ] 検査を再走して blocked が解けることを確認
 - [ ] 公開時に GitHub の Private Vulnerability Reporting を有効化（SECURITY.md の報告導線）
 
