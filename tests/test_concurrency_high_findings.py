@@ -72,7 +72,7 @@ def test_parallel_readers_do_not_forge_tampering(tmp_path):
     for t in readers + writers:
         t.start()
     for t in writers:
-        t.join(timeout=180)
+        t.join(timeout=300)  # CI の遅い runner を見込む（2026-08-30 拡大）
     stop.set()
     for t in readers:
         t.join(timeout=30)

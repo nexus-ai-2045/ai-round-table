@@ -1,0 +1,54 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# テストのみなので書き込み権限は不要
+permissions:
+  contents: read
+
+# 同じ PR で新しい push があったら古い実行は捨てる（Actions の待ち行列を無駄に伸ばさない）
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    strategy:
+      fail-fast: false
+      matrix:
+        # Windows で開発・実測している。ubuntu は POSIX 経路（killpg 等）の
+        # 未実測部分を CI で初めて踏むことになるので、落ちても他方を止めない。
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    # 保存 1 回 = git commit 1 回のため、ローカル実測で 10 分弱（直近 247 件 7 分 37 秒）。
+    # CI の Windows runner は開発機より遅い前提で余裕を持たせる。
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      # 改ざん検知（D12）が git に依存するため、commit できる identity が要る。
+      # 実際の commit は dispatcher が自分の名義で行うので、ここは fallback。
+      - name: configure git identity
+        run: |
+          git config --global user.name "ci"
+          git config --global user.email "ci@example.invalid"
+          git config --global init.defaultBranch main
+
+      - name: install
+        run: python -m pip install --upgrade pip pytest
+
+      - name: pytest
+        # 「python -m」が必須（cwd を sys.path に積んで import roundtable を解決する。
+        # 素の pytest 起動に変えると ModuleNotFoundError で全滅する）。
+        # -rx で xfail（未検証の前提）も一覧に出す。CONTRIBUTING の約束 2 と対。
+        # --durations=20 は初実走のホットスポット実測用。
+        run: python -m pytest -q -rx --durations=20

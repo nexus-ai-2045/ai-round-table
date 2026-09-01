@@ -1,0 +1,39 @@
+{
+ "round": 1,
+ "invocations": {
+  "dfd55bb82b1e": {
+   "participant": "codex",
+   "round": 1,
+   "state": "failed",
+   "detail": "timeout"
+  },
+  "aca57e43a4f8": {
+   "participant": "codex",
+   "round": 1,
+   "state": "failed",
+   "detail": "timeout"
+  }
+ },
+ "human_actions": [
+  {
+   "action": "new-topic",
+   "detail": "tier1-final",
+   "at": "2026-08-06T21:26:56.653604+00:00"
+  },
+  {
+   "action": "dispatch",
+   "detail": "codex:dfd55bb82b1e",
+   "at": "2026-08-06T21:27:00.695022+00:00"
+  },
+  {
+   "action": "tier3_paste_required",
+   "detail": "dfd55bb82b1e",
+   "at": "2026-08-06T21:29:46.347432+00:00"
+  },
+  {
+   "action": "dispatch",
+   "detail": "codex:aca57e43a4f8",
+   "at": "2026-08-07T03:03:03.701576+00:00"
+  }
+ ]
+}

@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# commit 前のゲート。今は ai-ratchet-gate 1 本。
+#
+# ai-ratchet-gate は「tracked なのに gitignore にマッチする」矛盾の増分を止める。
+# この repo は AI セッションが並走して commit するので、生成物が tracked に混入して
+# dirty が復活し続ける事故が起きやすい。D12 の clean 検査もその dirty を
+# 「dispatcher 以外の書込」と誤検知するため、ここで増分を止めておく価値が高い。
+#
+# 有効化: git config core.hooksPath .githooks
+set -uo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+
+if [ "${AI_RATCHET_GATE_SKIP:-}" = "1" ]; then
+    echo "==> pre-commit: ai-ratchet-gate SKIP (AI_RATCHET_GATE_SKIP=1)"
+    exit 0
+fi
+
+# --- ゲート本体の解決 -------------------------------------------------------
+# 絶対パスをここに焼かない (個人パスが tracked file に入ると preflight の
+# personal_path_scan に引っかかる)。環境変数 -> 隣接 clone の慣習位置。
+GATE="${AI_RATCHET_GATE:-}"
+if [ -z "$GATE" ]; then
+    for candidate in \
+        "$REPO_ROOT/../ai-ratchet-gate/ai_ratchet_gate.py" \
+        "$REPO_ROOT/../../ai-ratchet-gate/ai_ratchet_gate.py"
+    do
+        if [ -f "$candidate" ]; then GATE="$candidate"; break; fi
+    done
+fi
+
+# --- python の解決 ----------------------------------------------------------
+# Windows の `python` は Microsoft Store の stub に解決されることがある
+# (起動するとストアが開くだけで何も実行しない)。実際に動く 1 本を選ぶ。
+PY=""
+for candidate in "${PYTHON:-}" python3 python py; do
+    [ -z "$candidate" ] && continue
+    if [ "$candidate" = "py" ]; then
+        if py -3 -c "import sys" >/dev/null 2>&1; then PY="py -3"; break; fi
+    elif command -v "$candidate" >/dev/null 2>&1 \
+        && "$candidate" -c "import sys" >/dev/null 2>&1; then
+        PY="$candidate"; break
+    fi
+done
+
+# --- 環境が整っていない場合 -------------------------------------------------
+# ここは fail-OPEN にする。ゲートが見つからないのは「矛盾が増えた」証拠ではなく
+# **この環境にツールが無いだけ**で、それで他セッションの commit まで止めるのは
+# 巻き添えが大きすぎる。素通りしたことを目立つ形で残し、関所の網羅は CI 側に委ねる。
+if [ -z "$GATE" ] || [ ! -f "$GATE" ] || [ -z "$PY" ]; then
+    echo "WARN [pre-commit]: ai-ratchet-gate を実行できませんでした (commit は通します)" >&2
+    [ -z "$GATE" ] || [ ! -f "$GATE" ] && \
+        echo "  ゲート本体が見つかりません。AI_RATCHET_GATE に ai_ratchet_gate.py を指定してください。" >&2
+    [ -z "$PY" ] && \
+        echo "  動作する python が見つかりません。PYTHON に実行ファイルを指定してください。" >&2
+    exit 0
+fi
+
+# --- 本検査。ここから先の deny は「矛盾が増えた」という実測に基づく ---------
+$PY "$GATE" --repo "$REPO_ROOT" || exit 1

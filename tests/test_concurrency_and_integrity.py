@@ -158,7 +158,7 @@ def test_parallel_threads_lose_no_invocation(tmp_path):
     for t in ts:
         t.start()
     for t in ts:
-        t.join(timeout=120)
+        t.join(timeout=300)  # CI の遅い runner を見込む（ローカル 4x5 実測 123-152s / 2026-08-30 拡大）
     assert not errors, f"worker 失敗: {errors[0]!r}"
     assert len(created) == threads_n * per_thread
 
@@ -194,7 +194,7 @@ def test_journal_json_stays_parseable_under_parallel_writes(tmp_path):
     for t in ws:
         t.start()
     for t in ws:
-        t.join(timeout=120)
+        t.join(timeout=300)  # CI の遅い runner を見込む（ローカル 4x5 実測 123-152s / 2026-08-30 拡大）
     stop.set()
     r.join(timeout=5)
     assert not bad, f"壊れた JSON を観測: {bad[0]}"
