@@ -5,7 +5,8 @@
 - v5→v6: 追加調査・実測の統合 (機能変更なし):
   Windows での app-server 実測 / ACP 収束戦略 / Gemini の Tier1 候補昇格 /
   fs API による検証補助 / 先行事例ポジショニング。詳細根拠は references/ と
-  先行事例調査 report（非公開の内部調査。本 repo には含まれない）
+  [docs/prior-art.md](prior-art.md)（2026-09-01 に公開できる形で置き直した。
+  元は非公開の内部調査だったため、公開 repo から辿れなかった）
 - レビュー履歴: CC 敵対 8 / Web 裏取り 14 / Codex 1st 9 / Codex 2nd 6 /
   実装計画への内部コードレビュー 13 (計画に反映済み)。
   v4 (socket/daemon 案) は採用前に superseded、git 履歴に保全

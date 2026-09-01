@@ -137,6 +137,7 @@ Tier1 が失敗したら**自動で Tier3 に落ちる**（勝手に Tier2 へ�
 | ファイル | 内容 |
 |---|---|
 | [docs/DESIGN.md](docs/DESIGN.md) | 設計書 v6。決定事項 D1–D13 とその根拠 |
+| [docs/prior-art.md](docs/prior-art.md) | 先行事例と立ち位置（既存で代替できないかの裏取り） |
 | [docs/PROTOCOL.md](docs/PROTOCOL.md) | 席と dispatcher の間の契約 |
 | [docs/adr/](docs/adr/) | アーキテクチャ決定記録（0001: 公式 Codex SDK への段階移行） |
 | [docs/operations/](docs/operations/) | 運用記録 |
