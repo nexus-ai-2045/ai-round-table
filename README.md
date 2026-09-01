@@ -123,7 +123,8 @@ Tier1 が失敗したら**自動で Tier3 に落ちる**（勝手に Tier2 へ�
 
 ### 制約
 
-- Windows で開発・実測。POSIX 向けのコード経路はあるが未実測
+- Windows で開発・実測。POSIX 経路は CI (ubuntu-latest) で全テストが通ることまで確認済み。
+  実席（Codex / Grok アプリ）との Tier1 実往復は Windows でしか実測していない
 - Python 3.13 以上
 - 席の追加には各 AI 側の接続経路の調査が要る
 - Tier2（UI 自動化）は設計のみで未実装
