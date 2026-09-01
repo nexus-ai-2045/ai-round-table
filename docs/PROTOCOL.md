@@ -76,7 +76,7 @@ packet を届ける。人間への「貼ってください」案内は不要。
 
 - `timeout` の場合、delivered 記録 (Tier3) があれば「未貼り付けの可能性があります」と添えてよい
   (これは事実の補足であり、意見ではない)。
-- `tampered` (hash 不一致) が出たら、minutes.md が dispatcher 外で変更された可能性を明示し、
+- `tampered` (Git clean検査の不一致) が出たら、minutes.md が dispatcher 外で変更された可能性を明示し、
   CEO の指示を待つ (自動修復・自動再試行はしない)。
 
 ### 2.5 ラウンド境界で CEO 確認
@@ -132,15 +132,15 @@ Desktop socket 不在なら **実席は Tier3 貼付が本線** (2026-08-07 実�
 | `parse` | JSON として読めなかった (grace period 後も) | そのまま提示。CEO の指示待ち |
 | `schema` | 出力契約 (invocation_id/participant/opinion/claims) を満たさない | 違反理由をそのまま提示 |
 | `id-mismatch` | invocation_id または participant が発行時と不一致 (貼り間違い等) | 別 invocation の混入として提示 |
-| `tampered` | minutes.md が hash 証跡と不一致 (dispatcher 外で書き換えられた) | dispatcher 外での改変の可能性を明示、CEO 判断待ち |
+| `tampered` | minutes.md がGit管理状態と不一致 (dispatcher 外で書き換えられた) | dispatcher 外での改変の可能性を明示、CEO 判断待ち |
 | `relay` | 席への送信前に確定失敗した | detail を提示。未送信が確定している場合だけ縮退を検討する |
 | `delivery-unknown` | 席が受理した可能性があり送達成否を確定できない | 同じ relay で成果物を待つ。自動再送せず、後着成果物は同じ invocation として回収する |
 
 いずれも journal に記録され、`close` 時の失敗一覧に必ず現れる (偽装成功防止)。
 
-**`tampered` は「他の席が並行 merge した」では出ない** (2026-08-07 修正)。判定は
-snapshot 採取時 hash ではなく `.integrity/<slug>/minutes.md.sha256` との照合なので、
-dispatcher 経由の追記は何本入っても一致する。出たら本当に dispatcher 外の書き換えである。
+**`tampered` は「他の席が並行 merge した」では出ない** (2026-08-07修正、D12でGitへ移行)。
+判定はdispatcherが所有するpathに限定したGit clean検査であり、dispatcher経由の追記は
+pathspec限定commitとして履歴へ残る。出たらdispatcher外の書き換えの可能性を人間へ提示する。
 
 ### CLI の exit code
 
@@ -160,3 +160,6 @@ dispatch の輻輳なので、状況を確認してから同じコマンドを�
 - 席 (アプリの実チャット) は CEO が事前に作成する。ホストは新しい席を勝手に作らない。
 - `minutes/<slug>/` 配下 (minutes.md / journal.json / scratch / snapshot) 以外にホストが
   書き込みを行うことはない。
+- 独立reviewをproduction実装へ渡す場合も、ホストは意見を要約・評価しない。
+  `docs/REVIEW_TO_IMPLEMENTATION.md` のstart gate以降は別workflowであり、findingの採否と
+  fan-inはproduction integration ownerが行う。
