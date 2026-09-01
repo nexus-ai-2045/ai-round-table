@@ -65,8 +65,10 @@ repo-preflight の検査結果と、それに対する人間の判断を記録�
 - [ ] CI の緑を確認する（workflow は本 PR で追加済み。private では Actions が billing 方針で
       起動しないことを 2026-08-30 に実測 — 緑確認は public 化直後に行う。ローカルの代替実測:
       Windows で 247 passed / POSIX は未実測のまま README の制限節に明記）
-- [ ] 版番号の確定（`pyproject.toml` は 0.2.0。v0.3 Phase 1–4 が着地済みのため、
-      公開タグ希望 0.1.0 とは 2 版ずれ。要・人間判断）
+- [x] 版番号の確定 — 2026-09-01 完了。**0.3.0** に統一（v0.3 Phase 1–4 が着地済みの実体に
+      合わせた。起草時の「公開タグ希望 0.1.0」は 2 版ずれのため撤回）。数字は
+      `roundtable/__version__` の 1 箇所に寄せ、pyproject との一致と relay の直書き禁止を
+      `tests/test_version_consistency.py` が機械検査する
 - [ ] `human_visual_review` の実施
 - [ ] 検査を再走して blocked が解けることを確認
 - [ ] 公開時に GitHub の Private Vulnerability Reporting を有効化（SECURITY.md の報告導線）

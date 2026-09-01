@@ -38,6 +38,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from . import __version__
 from .relay import RelayError
 from .relay_process import ProcessTree
 
@@ -193,7 +194,7 @@ class GrokAcpRelay:
                     "fs": {"readTextFile": False, "writeTextFile": False},
                     "terminal": False,
                 },
-                "clientInfo": {"name": "ai-round-table", "version": "0.2.0"},
+                "clientInfo": {"name": "ai-round-table", "version": __version__},
             },
             timeout=TIMEOUT_INITIALIZE,
         )
