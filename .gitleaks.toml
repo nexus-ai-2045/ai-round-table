@@ -1,0 +1,26 @@
+# gitleaks の設定。既定ルールをすべて継承したうえで、誤検知を 1 パターンだけ除外する。
+#
+# なぜ要るか: 履歴全体を scan すると `references/codex-app-server-README.*` で
+# generic-api-key が 2 箇所ヒットする。中身は OpenAI の app-server README に載っている
+# JSON 例の `idempotencyKey`（`account/rateLimitResetCredit/consume` のサンプル）で、
+# 資格情報ではない。idempotency key はクライアントが生成する重複排除トークンであり、
+# それ自体では何にもアクセスできない。
+#
+# 差分 scan では出ず、履歴全体 scan の時だけ出る。公開後に第三者が全履歴を scan しても
+# 同じ誤検知に当たるため、判断を repo 側に残す。
+#
+# 除外の効き方を狭くしてある:
+# - rule を上書きせず **global allowlist** で除外する。rule 定義に触らないので
+#   generic-api-key 自体は生きたまま（rule を再定義すると検知能力ごと消える）
+# - `condition = "AND"` で **path と regex の両方**に当たった時だけ除外する。
+#   原典ファイルに将来べつの秘密が混ざっても、この 1 パターン以外は検知される
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "OpenAI app-server README の idempotencyKey 例示値 (資格情報ではない)"
+condition = "AND"
+paths = ['''references/codex-app-server-README\..*\.md''']
+regexTarget = "line"
+regexes = ['''"idempotencyKey":\s*"[0-9a-f-]{36}"''']
