@@ -75,11 +75,19 @@ def work_tree_root(path: Path) -> Path | None:
     `-C <top>` 以降の pathspec が **top 基準で再解決**されて別の場所を指す
     (test_cli_cwd_is_absolute_for_relative_root で実測)。ledger の公開関数は
     すべて絶対パスに正規化してから git を呼ぶ。
+
+    出口でも resolve する: git の `--show-toplevel` は同じディレクトリでも
+    Python の `Path.resolve()` と綴りが違うことがある (Windows の 8.3 短縮名。
+    GitHub の windows runner は TEMP が `C:\\Users\\RUNNER~1\\...` で、
+    `resolve()` はこれを `runneradmin` へ展開する)。綴りが割れると
+    ensure_git_root の `top == root` が同じ場所を指していても不成立になり、
+    **既存 repo の中にネスト repo を init する** (D13 が禁じている状態)。
+    入口と出口を同じ正規形に揃えることでしか防げない。
     """
     r = _git(Path(path).resolve(), "rev-parse", "--show-toplevel")
     if r.returncode != 0:
         return None
-    return Path(r.stdout.strip())
+    return Path(r.stdout.strip()).resolve()
 
 
 def ensure_git_root(root: Path) -> Path:
