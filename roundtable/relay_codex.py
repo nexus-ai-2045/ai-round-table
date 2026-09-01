@@ -20,6 +20,7 @@ import threading
 import time
 from typing import Any
 
+from . import __version__
 from .relay import DeliveryUnknownError, RelayError
 from .relay_process import ProcessTree
 
@@ -217,7 +218,7 @@ class CodexAppServerRelay:
                 "clientInfo": {
                     "name": "ai-round-table",
                     "title": "ai-round-table",
-                    "version": "0.2.0",
+                    "version": __version__,
                 },
                 "capabilities": {},
             },
