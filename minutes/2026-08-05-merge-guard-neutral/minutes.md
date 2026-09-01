@@ -23,6 +23,6 @@ merge guard が deny した。CEO は手動でブラウザ merge した。
 security check がスキップされた事実自体は見逃したくない。
 
 関連ファイル:
-  C:/Users/yas/Projects/shared/scripts/pr_merge_guarded.py (_ci_state)
-  C:/Users/yas/Projects/shared/scripts/pr_merge_permission_gate.py (CI_VALUES)
+  <projects-root>/shared/scripts/pr_merge_guarded.py (_ci_state)
+  <projects-root>/shared/scripts/pr_merge_permission_gate.py (CI_VALUES)
 

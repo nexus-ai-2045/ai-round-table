@@ -3,8 +3,8 @@
 以下の 2 ファイルを読んでレビューしてください (ローカルファイルが読める前提。読めなければ
 「読めない」と返答してください — 全文を貼り直します):
 
-1. C:/Users/yas/Projects/Documents/.repos/nexus_ai/private/ai-roundtable/docs/plans/2026-07-27-v0.1-implementation.md
-2. C:/Users/yas/Projects/Documents/.repos/nexus_ai/private/ai-roundtable/docs/spike-plan.md
+1. <repo-root>/docs/plans/2026-07-27-v0.1-implementation.md
+2. <repo-root>/docs/spike-plan.md
 3. 設計本体 (前提): 同 docs/DESIGN.md (v5, あなたが前回 GO した chat-first 設計)
 
 ## 観点 (運用者・発注者の目線で)
