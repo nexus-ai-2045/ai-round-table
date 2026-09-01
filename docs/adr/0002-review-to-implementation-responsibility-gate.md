@@ -23,6 +23,21 @@ start gateでreview成果物、exact base、専用worktree/branch、所有集合
 clusterを検査する。fan-in gateでtest、commit receipt、terminal lane、統合後再検証、単一PRを
 検査し、採否責任をproduction integration ownerへ明示する。証跡は既存どおりGitへ一本化する。
 
+gateが「検査する」と書いた項目は、文章ではなく機械が実際に確かめられる形にする。
+初版はここが緩く、次の4点でgateが**偽のsuccess**を返した (Codex独立レビューのP1指摘)。
+いずれもdetector付きで閉じた ([docs/REVIEW_TO_IMPLEMENTATION.md](../REVIEW_TO_IMPLEMENTATION.md) に契約を明記)。
+
+| 穴 | 何が素通りしたか | 閉じ方 |
+|---|---|---|
+| rename検出 | 所有外ファイルをowned名へ改名すると所有権検査を通過 | `git diff --no-renames` |
+| fan-inのclean検査不在 | 所有外の未commitを残したままok | fan-inでも`status --porcelain` |
+| finding IDの席跨ぎ衝突 | 2席の同一IDが1件に潰れ片方の指摘が消える | `<reviewer>:<id>` で名前空間化 |
+| 専用worktreeの未検証 | primary checkoutを指定しても通過 | linked worktree判定 (`--git-common-dir`) |
+
+「専用worktree」のようにdocだけが強く主張して実装が追いつかない状態は、
+この repo が3回繰り返した設計ミスと同型 (未検証の前提の上に構造を建てる) なので、
+主張を弱めるのではなく実装を主張水準へ引き上げる方を選んだ。
+
 ## Allowed
 
 - 既存packet/relayで独立reviewを回収する。

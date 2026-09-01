@@ -3,11 +3,47 @@ import subprocess
 from pathlib import Path
 
 from roundtable.cli import main
-from roundtable.review_workflow import validate_review_workflow
+from roundtable.review_workflow import validate_live_git, validate_review_workflow
 
 
 BASE = "a" * 40
 COMMIT = "b" * 40
+
+
+def _git(repo, *args):
+    return subprocess.run(
+        ["git", "-C", str(repo), *args], check=True, capture_output=True, text=True,
+        encoding="utf-8",
+    )
+
+
+def _seeded_repo(tmp_path, name="main"):
+    """seed commit を 1 つ持つ primary checkout を作る。"""
+    repo = tmp_path / name
+    repo.mkdir()
+    subprocess.run(["git", "init", "-qb", "main", str(repo)], check=True)
+    _git(repo, "config", "user.email", "test@example.invalid")
+    _git(repo, "config", "user.name", "test")
+    (repo / "seed.txt").write_text("seed", encoding="utf-8")
+    _git(repo, "add", "seed.txt")
+    _git(repo, "commit", "-qm", "seed")
+    return repo
+
+
+def _linked_worktree(tmp_path, branch="feat/review-1"):
+    """primary checkout と、そこから生やした専用 worktree を返す。
+
+    gate は「専用 worktree であること」を要求するので、test も本物の
+    linked worktree を作る (plain な git init では実運用形を踏めない)。
+    """
+    repo = _seeded_repo(tmp_path)
+    worktree = tmp_path / "wt"
+    _git(repo, "worktree", "add", "-q", "-b", branch, str(worktree))
+    return repo, worktree
+
+
+def _head(repo):
+    return _git(repo, "rev-parse", "HEAD").stdout.strip()
 
 
 def _manifest(tmp_path):
@@ -37,7 +73,7 @@ def _manifest(tmp_path):
             "prohibited": ["merge", "release", "settings", "visibility", "auth", "secret", "delete", "force"],
         },
         "root_cause_clusters": [
-            {"id": "RC1", "finding_ids": ["R1"], "owner": "implementation-lane", "test": "tests/test_review_workflow.py"}
+            {"id": "RC1", "finding_ids": ["grok:R1"], "owner": "implementation-lane", "test": "tests/test_review_workflow.py"}
         ],
         "fan_in": {
             "owner": "codex-mainline",
@@ -100,40 +136,62 @@ def test_fan_in_gate_requires_receipt_tests_and_single_pr(tmp_path):
     assert any("terminal_lanes" in error for error in errors)
 
 
+def test_same_finding_id_from_two_reviewers_stays_separate(tmp_path):
+    """独立レビュー 2 席が同じ採番 (R1) を使っても 1 件に潰れない。
+
+    素の id で集合に入れると 2 件が 1 件になり、cluster が片方だけを参照していても
+    「全 finding 割当済み」に見えて、もう片方の指摘が黙って消える。
+    """
+    data = _manifest(tmp_path)
+    second = tmp_path / "review2.json"
+    second.write_text(json.dumps({
+        "schema": "roundtable.review/v1", "base_commit": BASE, "complete": True,
+        "findings": [{"id": "R1"}],
+    }), encoding="utf-8")
+    data["review_artifacts"].append(
+        {"reviewer": "claude", "path": str(second), "schema": "roundtable.review/v1"}
+    )
+
+    # grok の R1 しか割り当てていないので claude の R1 が未割当として残る
+    errors = validate_review_workflow(data, phase="start")
+    assert any("未割当" in error and "claude:R1" in error for error in errors)
+
+    # 両方を明示すれば通る
+    data["root_cause_clusters"][0]["finding_ids"] = ["grok:R1", "claude:R1"]
+    assert validate_review_workflow(data, phase="start") == []
+
+
+def test_owned_files_rejects_backslash_and_unhashable(tmp_path):
+    """schema 段階で弾く: 綴り違いは fan-in の照合で必ず外れ、unhashable は set() を落とす。"""
+    data = _manifest(tmp_path)
+    data["implementation"]["owned_files"] = ["roundtable\\review_workflow.py"]
+    assert any("owned_files" in error for error in validate_review_workflow(data, phase="start"))
+
+    data["implementation"]["owned_files"] = [["roundtable/review_workflow.py"]]
+    errors = validate_review_workflow(data, phase="start")  # TypeError で落ちないこと
+    assert any("owned_files" in error for error in errors)
+
+
 def test_cli_start_gate_checks_live_exact_base(tmp_path, capsys):
-    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
-    subprocess.run(["git", "-C", str(tmp_path), "config", "user.email", "test@example.invalid"], check=True)
-    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "test"], check=True)
-    (tmp_path / "seed.txt").write_text("seed", encoding="utf-8")
-    subprocess.run(["git", "-C", str(tmp_path), "add", "seed.txt"], check=True)
-    subprocess.run(["git", "-C", str(tmp_path), "commit", "-qm", "seed"], check=True)
+    _, worktree = _linked_worktree(tmp_path)
     data = _manifest(tmp_path)
     data["base_commit"] = BASE
+    data["implementation"]["worktree"] = str(worktree)
     manifest = tmp_path / "workflow.json"
     manifest.write_text(json.dumps(data), encoding="utf-8")
 
-    rc = main(["workflow-gate", str(manifest), "--phase", "start", "--repo", str(tmp_path)])
+    rc = main(["workflow-gate", str(manifest), "--phase", "start", "--repo", str(worktree)])
     out = capsys.readouterr().out
     assert rc == 1
     assert "base_commit" in out and "HEAD" in out
 
 
 def test_e2e_mock_start_gate_accepts_clean_exact_worktree(tmp_path, capsys):
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    subprocess.run(["git", "init", "-qb", "feat/review-1", str(repo)], check=True)
-    subprocess.run(["git", "-C", str(repo), "config", "user.email", "test@example.invalid"], check=True)
-    subprocess.run(["git", "-C", str(repo), "config", "user.name", "test"], check=True)
-    (repo / "seed.txt").write_text("seed", encoding="utf-8")
-    subprocess.run(["git", "-C", str(repo), "add", "seed.txt"], check=True)
-    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "seed"], check=True)
-    head = subprocess.run(
-        ["git", "-C", str(repo), "rev-parse", "HEAD"], check=True,
-        capture_output=True, text=True,
-    ).stdout.strip()
+    _, worktree = _linked_worktree(tmp_path)
+    head = _head(worktree)
     data = _manifest(tmp_path)
     data["base_commit"] = head
-    data["implementation"]["worktree"] = str(repo)
+    data["implementation"]["worktree"] = str(worktree)
     review_path = Path(data["review_artifacts"][0]["path"])
     review_data = json.loads(review_path.read_text(encoding="utf-8"))
     review_data["base_commit"] = head
@@ -141,33 +199,96 @@ def test_e2e_mock_start_gate_accepts_clean_exact_worktree(tmp_path, capsys):
     manifest = tmp_path / "workflow.json"
     manifest.write_text(json.dumps(data), encoding="utf-8")
 
-    rc = main(["workflow-gate", str(manifest), "--phase", "start", "--repo", str(repo)])
+    rc = main(["workflow-gate", str(manifest), "--phase", "start", "--repo", str(worktree)])
     assert rc == 0
     assert "[workflow-gate ok]" in capsys.readouterr().out
 
 
+def test_start_gate_rejects_primary_checkout(tmp_path):
+    """path が一致していても primary checkout なら「専用 worktree」ではない。"""
+    repo = _seeded_repo(tmp_path)
+    _git(repo, "checkout", "-qb", "feat/review-1")
+    data = _manifest(tmp_path)
+    data["base_commit"] = _head(repo)
+    data["implementation"]["worktree"] = str(repo)
+
+    errors = validate_live_git(data, phase="start", repo=repo)
+    assert any("primary checkout" in error for error in errors)
+
+
 def test_live_fan_in_rejects_change_outside_owned_files(tmp_path):
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    subprocess.run(["git", "init", "-qb", "feat/review-1", str(repo)], check=True)
-    subprocess.run(["git", "-C", str(repo), "config", "user.email", "test@example.invalid"], check=True)
-    subprocess.run(["git", "-C", str(repo), "config", "user.name", "test"], check=True)
-    (repo / "seed.txt").write_text("seed", encoding="utf-8")
-    subprocess.run(["git", "-C", str(repo), "add", "seed.txt"], check=True)
-    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "seed"], check=True)
-    base = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
-    (repo / "outside.txt").write_text("outside", encoding="utf-8")
-    subprocess.run(["git", "-C", str(repo), "add", "outside.txt"], check=True)
-    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "implementation"], check=True)
-    commit = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
+    _, worktree = _linked_worktree(tmp_path)
+    base = _head(worktree)
+    (worktree / "outside.txt").write_text("outside", encoding="utf-8")
+    _git(worktree, "add", "outside.txt")
+    _git(worktree, "commit", "-qm", "implementation")
     data = _manifest(tmp_path)
     data["base_commit"] = base
-    data["implementation"]["worktree"] = str(repo)
-    data["fan_in"]["commit_sha"] = commit
+    data["implementation"]["worktree"] = str(worktree)
+    data["fan_in"]["commit_sha"] = _head(worktree)
 
-    from roundtable.review_workflow import validate_live_git
-    errors = validate_live_git(data, phase="fan-in", repo=repo)
+    errors = validate_live_git(data, phase="fan-in", repo=worktree)
     assert any("owned_files 外" in error and "outside.txt" in error for error in errors)
+
+
+def test_live_fan_in_rejects_rename_of_unowned_file(tmp_path):
+    """所有外ファイルを owned な名前へ改名しても素通りしない。
+
+    git diff は rename 検出が既定で有効なので --name-only は新しい名前しか返さない。
+    --no-renames が無いと「owned しか触っていない」に見える (fail-open)。
+    """
+    _, worktree = _linked_worktree(tmp_path)
+    (worktree / "outside.txt").write_text("payload", encoding="utf-8")
+    _git(worktree, "add", "outside.txt")
+    _git(worktree, "commit", "-qm", "seed outside")
+    base = _head(worktree)
+
+    owned = worktree / "owned.py"
+    _git(worktree, "mv", "outside.txt", "owned.py")
+    _git(worktree, "commit", "-qm", "rename")
+    assert owned.exists()
+
+    data = _manifest(tmp_path)
+    data["base_commit"] = base
+    data["implementation"]["worktree"] = str(worktree)
+    data["implementation"]["owned_files"] = ["owned.py"]
+    data["fan_in"]["commit_sha"] = _head(worktree)
+
+    errors = validate_live_git(data, phase="fan-in", repo=worktree)
+    assert any("owned_files 外" in error and "outside.txt" in error for error in errors)
+
+
+def test_live_fan_in_rejects_dirty_worktree(tmp_path):
+    """所有外の未 commit を残したまま fan-in が ok を返さない。"""
+    _, worktree = _linked_worktree(tmp_path)
+    base = _head(worktree)
+    (worktree / "roundtable").mkdir()
+    (worktree / "roundtable" / "review_workflow.py").write_text("x = 1\n", encoding="utf-8")
+    _git(worktree, "add", "roundtable/review_workflow.py")
+    _git(worktree, "commit", "-qm", "implementation")
+    (worktree / "stray.txt").write_text("uncommitted", encoding="utf-8")
+
+    data = _manifest(tmp_path)
+    data["base_commit"] = base
+    data["implementation"]["worktree"] = str(worktree)
+    data["implementation"]["owned_files"] = ["roundtable/review_workflow.py"]
+    data["fan_in"]["commit_sha"] = _head(worktree)
+
+    errors = validate_live_git(data, phase="fan-in", repo=worktree)
+    assert any("clean ではない" in error for error in errors)
+
+
+def test_live_fan_in_rejects_empty_receipt(tmp_path):
+    """実装 commit ゼロ (commit_sha == base_commit) を子孫判定が通してしまわない。"""
+    _, worktree = _linked_worktree(tmp_path)
+    base = _head(worktree)
+    data = _manifest(tmp_path)
+    data["base_commit"] = base
+    data["implementation"]["worktree"] = str(worktree)
+    data["fan_in"]["commit_sha"] = base
+
+    errors = validate_live_git(data, phase="fan-in", repo=worktree)
+    assert any("実装 commit が無い" in error for error in errors)
 
 
 def test_valid_fan_in_manifest_passes_schema_only(tmp_path):

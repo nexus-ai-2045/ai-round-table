@@ -24,10 +24,17 @@ fan-in証跡へ接続する。既存roundtableの議事録、packet、relay、sc
 
 1. `base_commit` は40桁のexact SHAで、live `HEAD` と一致する。
 2. 専用worktreeと非default branchがlive状態と一致し、worktreeがcleanである。
+   「専用worktree」は path 一致だけでなく **linked worktree であること**を検査する
+   (`git rev-parse --git-dir` と `--git-common-dir` の相違)。primary checkout を
+   指定した場合は deny する。`git worktree add` で作ること。
 3. review成果物が存在し、同じ`base_commit`、`complete: true`、`roundtable.review/v1`、
    stable finding IDを持つ。
 4. 全findingが1つ以上のroot-cause clusterへ割り当てられ、clusterに単一ownerと失敗経路testがある。
-5. `owned_files` は重複のないrepo相対pathである。
+   **cluster が参照する finding は `<reviewer>:<id>` 形式**で書く。独立レビューは席同士が
+   採番を相談しないため、素の id では grok の `R1` と claude の `R1` が 1 件に潰れ、
+   片方だけを参照していても「全件割当済み」に見えてしまう。
+5. `owned_files` は重複のないrepo相対pathである。区切りは `/` のみ (`\` は deny)。
+   綴りが git の出力と食い違うと fan-in の所有照合が必ず外れるため、schema 段階で止める。
 6. 権限境界は少なくとも `merge/release/settings/visibility/auth/secret/delete/force` を禁止する。
 
 ```powershell
@@ -39,6 +46,17 @@ python -m roundtable.cli workflow-gate workflow.json --phase start --repo <workt
 start契約に加え、exact commit SHA、成功したtest command、implementation ownerのterminal化、
 統合後再検証、production integration owner、`single_pr: true` を要求する。live Gitでbaseから
 commitまでの変更ファイルが`owned_files`内だけかを照合する。
+
+照合は `git diff --no-renames -z --name-only` で取る。
+
+- `--no-renames`: 既定の rename 検出は改名後の名前しか返さないため、所有外ファイルを
+  owned な名前へ改名すると所有権検査が**素通り**する (fail-open)。
+- `-z`: 非 ASCII path が `core.quotepath` でクォート化され、照合が全部外れるのを避ける。
+
+worktree の clean 検査は start だけでなく **fan-in でも行う**。所有外の未commit/未追跡を
+残したまま「所有ファイルしか触っていない」と通ってしまうため。
+`commit_sha` が `base_commit` と同一 (実装 commit ゼロ) の receipt も deny する
+(`merge-base --is-ancestor` は自分自身を祖先と判定するため、これだけでは弾けない)。
 
 ```powershell
 python -m roundtable.cli workflow-gate workflow.json --phase fan-in --repo <worktree>
@@ -69,7 +87,7 @@ gate成功は「安全に採用済み」「merge可」を意味しない。構�
     "prohibited": ["merge", "release", "settings", "visibility", "auth", "secret", "delete", "force"]
   },
   "root_cause_clusters": [
-    {"id": "RC1", "finding_ids": ["G-1", "C-2"], "owner": "implementation-lane", "test": "tests/test_example.py"}
+    {"id": "RC1", "finding_ids": ["grok:G-1", "claude:C-2"], "owner": "implementation-lane", "test": "tests/test_example.py"}
   ],
   "fan_in": {
     "owner": "production-integration-owner",
