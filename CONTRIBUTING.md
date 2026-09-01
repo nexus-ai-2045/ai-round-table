@@ -6,7 +6,10 @@
 
 - Python 3.13 以上
 - git（改ざん検知に使うため必須）
-- Windows で開発・実測しています。POSIX 経路は実装がありますが未実測です
+- Windows で開発・実測しています。POSIX 経路は CI (ubuntu-latest) で全テストが通ります。
+  実席との Tier1 実往復は Windows でしか実測していません
+- CI は windows-latest / ubuntu-latest の 2 面。**ローカルで緑でも実行環境で落ちること**が
+  実際にありました（windows runner の `TEMP` が 8.3 短縮名で ledger の path 比較が壊れた件）
 
 ```bash
 python -m pytest -q          # 全テスト
