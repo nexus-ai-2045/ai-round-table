@@ -1,7 +1,7 @@
 ---
 topic: 税理士学習アプリ：統合設計v2のレビュー
 status: open
-round: 1
+round: 2
 participants: [claude]
 verdict:
 ---
