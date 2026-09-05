@@ -10,7 +10,7 @@
   "9666b1769f99": {
    "participant": "claude",
    "round": 2,
-   "state": "prepared",
+   "state": "output-received",
    "detail": ""
   }
  },
