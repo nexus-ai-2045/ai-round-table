@@ -4,7 +4,7 @@
   "88af9d575848": {
    "participant": "claude",
    "round": 1,
-   "state": "prepared",
+   "state": "output-received",
    "detail": ""
   }
  },
