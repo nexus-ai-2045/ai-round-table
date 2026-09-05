@@ -49,7 +49,8 @@ python -m roundtable.cli workflow-gate workflow.json --phase start --repo <workt
 
 start契約に加え、exact commit SHA、cluster IDに結び付いた成功test receipt、全cluster ownerのterminal化、
 統合後再検証、production integration owner、`single_pr: true` を要求する。live Gitでbaseから
-commitまでの変更ファイルが`owned_files`内だけかを照合する。
+commitまでの変更ファイルが`owned_files`内だけかを照合し、最終treeがbaseと同一なら
+「途中で変更して全て戻しただけ」の空の実装としてdenyする。
 
 照合は `git log -m --format= --no-renames -z --name-only base..commit` で、range内の
 各commitが触った全pathを取る。終端treeだけを比較すると、所有外ファイルを途中で変更して

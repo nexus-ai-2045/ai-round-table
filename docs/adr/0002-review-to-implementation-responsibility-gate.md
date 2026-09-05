@@ -35,7 +35,7 @@ gateが「検査する」と書いた項目は、文章ではなく機械が実�
 | 専用worktreeの未検証 | primary checkoutを指定しても通過 | linked worktree判定 (`--git-common-dir`) |
 
 後続レビューでは、区切り文字によるfinding ID再衝突、権限境界の自己矛盾、非object/非UTF-8入力、
-default branch名の推測、空commit、Git設定による未追跡非表示、終端tree比較による途中違反の消失、
+default branch名の推測、空commit、最終treeがbaseと同一のrevert-only履歴、Git設定による未追跡非表示、終端tree比較による途中違反の消失、
 cluster owner/test receiptの未結合を再現した。境界入力を先に型検査し、default branchはremote実体、
 所有範囲は全commit range、完了証跡はcluster IDとownerへ結び付ける。default branchはcached
 `origin/HEAD`ではなくremoteへ照会し、判定不能はfail-closedとする。

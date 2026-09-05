@@ -378,6 +378,11 @@ def validate_live_git(data: dict, *, phase: str, repo: Path) -> list[str]:
         ancestor = _git(repo, "merge-base", "--is-ancestor", data["base_commit"], commit_sha)
         if ancestor.returncode != 0:
             errors.append("fan_in.commit_sha: base_commit の子孫ではない")
+        final_diff = _git(repo, "diff", "--quiet", data["base_commit"], commit_sha)
+        if final_diff.returncode == 0:
+            errors.append("fan_in: 最終 tree が base_commit と同一 (実装差分が無い)")
+        elif final_diff.returncode != 1:
+            errors.append("fan_in: 最終 tree の差分を判定できない")
         touched, detail = _touched_files(repo, data["base_commit"], commit_sha)
         if touched is None:
             errors.append(f"fan_in: changed files を取得できない: {detail}")

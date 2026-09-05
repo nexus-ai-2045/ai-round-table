@@ -414,6 +414,24 @@ def test_live_fan_in_rejects_empty_descendant_commit(tmp_path):
     assert any("変更ファイルが無い" in error for error in errors)
 
 
+def test_live_fan_in_rejects_changes_reverted_to_base_tree(tmp_path):
+    _, worktree = _linked_worktree(tmp_path)
+    base = _head(worktree)
+    (worktree / "owned.py").write_text("temporary", encoding="utf-8")
+    _git(worktree, "add", "owned.py")
+    _git(worktree, "commit", "-qm", "implement temporarily")
+    (worktree / "owned.py").unlink()
+    _git(worktree, "add", "owned.py")
+    _git(worktree, "commit", "-qm", "revert implementation")
+    data = _manifest(tmp_path)
+    data["base_commit"] = base
+    data["implementation"]["worktree"] = str(worktree)
+    data["implementation"]["owned_files"] = ["owned.py"]
+    data["fan_in"]["commit_sha"] = _head(worktree)
+    errors = validate_live_git(data, phase="fan-in", repo=worktree)
+    assert any("最終 tree が base_commit と同一" in error for error in errors)
+
+
 def test_live_fan_in_rejects_transient_unowned_commit(tmp_path):
     _, worktree = _linked_worktree(tmp_path)
     base = _head(worktree)
