@@ -1,6 +1,13 @@
 {
  "round": 1,
- "invocations": {},
+ "invocations": {
+  "88af9d575848": {
+   "participant": "claude",
+   "round": 1,
+   "state": "prepared",
+   "detail": ""
+  }
+ },
  "human_actions": [
   {
    "id": "37295dc12992",
