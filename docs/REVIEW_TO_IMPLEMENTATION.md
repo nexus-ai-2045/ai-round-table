@@ -38,8 +38,8 @@ fan-in証跡へ接続する。既存roundtableの議事録、packet、relay、sc
    綴りが git の出力と食い違うと fan-in の所有照合が必ず外れるため、schema 段階で止める。
 6. 権限境界は少なくとも `merge/release/settings/visibility/auth/secret/delete/force` を禁止する。
    これらを `allowed` にも書いた矛盾した境界は deny する。
-7. default branchは`main`/`master`という名前の推測ではなく、remoteの`origin/HEAD`から判定する。
-   判定不能なら安全側に停止する。
+7. default branchは`main`/`master`という名前やcached `origin/HEAD`の推測ではなく、
+   `git ls-remote --symref origin HEAD`でremote実体から判定する。判定不能なら安全側に停止する。
 
 ```powershell
 python -m roundtable.cli workflow-gate workflow.json --phase start --repo <worktree>
