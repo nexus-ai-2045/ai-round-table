@@ -3,7 +3,7 @@ title: 独立レビューとproduction実装責任を二段gateで分離する
 type: adr
 status: accepted
 created: 2026-08-30
-updated: 2026-08-30
+updated: 2026-09-06
 owner: production integration owner
 related: docs/REVIEW_TO_IMPLEMENTATION.md
 ---
@@ -33,6 +33,11 @@ gateが「検査する」と書いた項目は、文章ではなく機械が実�
 | fan-inのclean検査不在 | 所有外の未commitを残したままok | fan-inでも`status --porcelain` |
 | finding IDの席跨ぎ衝突 | 2席の同一IDが1件に潰れ片方の指摘が消える | `<reviewer>:<id>` で名前空間化 |
 | 専用worktreeの未検証 | primary checkoutを指定しても通過 | linked worktree判定 (`--git-common-dir`) |
+
+後続レビューでは、区切り文字によるfinding ID再衝突、権限境界の自己矛盾、非object/非UTF-8入力、
+default branch名の推測、空commit、Git設定による未追跡非表示、終端tree比較による途中違反の消失、
+cluster owner/test receiptの未結合を再現した。境界入力を先に型検査し、default branchはremote実体、
+所有範囲は全commit range、完了証跡はcluster IDとownerへ結び付け、判定不能はfail-closedとする。
 
 「専用worktree」のようにdocだけが強く主張して実装が追いつかない状態は、
 この repo が3回繰り返した設計ミスと同型 (未検証の前提の上に構造を建てる) なので、

@@ -27,6 +27,8 @@ def _seeded_repo(tmp_path, name="main"):
     (repo / "seed.txt").write_text("seed", encoding="utf-8")
     _git(repo, "add", "seed.txt")
     _git(repo, "commit", "-qm", "seed")
+    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    _git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
     return repo
 
 
@@ -79,7 +81,7 @@ def _manifest(tmp_path):
             "owner": "codex-mainline",
             "single_pr": True,
             "commit_sha": COMMIT,
-            "tests": [{"command": "pytest", "status": "passed"}],
+            "tests": [{"command": "pytest", "status": "passed", "cluster_ids": ["RC1"]}],
             "integration_reverified": True,
             "terminal_lanes": ["implementation-lane"],
         },
@@ -105,14 +107,13 @@ def test_start_gate_rejects_review_for_different_base_or_incomplete(tmp_path):
     assert any("complete" in error for error in errors)
 
 
-def test_start_gate_rejects_base_branch_and_ownership_violations(tmp_path):
+def test_start_gate_rejects_invalid_base_and_ownership_violations(tmp_path):
     data = _manifest(tmp_path)
     data["base_commit"] = "main"
     data["implementation"]["branch"] = "main"
     data["implementation"]["owned_files"] = ["../outside.py", "roundtable/review_workflow.py", "roundtable/review_workflow.py"]
     errors = validate_review_workflow(data, phase="start")
     assert any("base_commit" in error for error in errors)
-    assert any("default branch" in error for error in errors)
     assert any("owned_files" in error for error in errors)
 
 
@@ -293,3 +294,119 @@ def test_live_fan_in_rejects_empty_receipt(tmp_path):
 
 def test_valid_fan_in_manifest_passes_schema_only(tmp_path):
     assert validate_review_workflow(_manifest(tmp_path), phase="fan-in") == []
+
+
+def test_finding_namespace_rejects_ambiguous_delimiters(tmp_path):
+    data = _manifest(tmp_path)
+    data["review_artifacts"][0]["reviewer"] = "a:b"
+    assert any("':'" in error for error in validate_review_workflow(data, phase="start"))
+
+    data = _manifest(tmp_path)
+    review = Path(data["review_artifacts"][0]["path"])
+    payload = json.loads(review.read_text(encoding="utf-8"))
+    payload["findings"][0]["id"] = "b:c"
+    review.write_text(json.dumps(payload), encoding="utf-8")
+    assert any("':'" in error for error in validate_review_workflow(data, phase="start"))
+
+
+def test_permission_boundary_rejects_contradictory_allowed_operation(tmp_path):
+    data = _manifest(tmp_path)
+    data["permission_boundary"]["allowed"].append("merge")
+    errors = validate_review_workflow(data, phase="start")
+    assert any("allowed" in error and "merge" in error for error in errors)
+
+
+def test_review_artifact_rejects_non_object_without_traceback(tmp_path):
+    data = _manifest(tmp_path)
+    Path(data["review_artifacts"][0]["path"]).write_text("[]", encoding="utf-8")
+    errors = validate_review_workflow(data, phase="start")
+    assert any("object" in error for error in errors)
+
+
+def test_cli_rejects_non_utf8_manifest_without_traceback(tmp_path, capsys):
+    manifest = tmp_path / "workflow.json"
+    manifest.write_bytes(b"\xff\xfe")
+    rc = main(["workflow-gate", str(manifest), "--phase", "start", "--repo", str(tmp_path)])
+    assert rc == 1
+    assert "manifest を読めない" in capsys.readouterr().out
+
+
+def test_start_gate_rejects_actual_nonstandard_default_branch(tmp_path):
+    repo, worktree = _linked_worktree(tmp_path, branch="trunk")
+    _git(repo, "update-ref", "refs/remotes/origin/trunk", "refs/remotes/origin/main")
+    _git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/trunk")
+    data = _manifest(tmp_path)
+    data["implementation"]["branch"] = "trunk"
+    data["implementation"]["worktree"] = str(worktree)
+    data["base_commit"] = _head(worktree)
+    errors = validate_live_git(data, phase="start", repo=worktree)
+    assert any("default branch" in error and "trunk" in error for error in errors)
+
+
+def test_start_gate_fails_closed_when_default_branch_is_unknown(tmp_path):
+    repo, worktree = _linked_worktree(tmp_path)
+    _git(repo, "symbolic-ref", "--delete", "refs/remotes/origin/HEAD")
+    data = _manifest(tmp_path)
+    data["implementation"]["worktree"] = str(worktree)
+    data["base_commit"] = _head(worktree)
+    errors = validate_live_git(data, phase="start", repo=worktree)
+    assert any("default branch" in error and "判定できない" in error for error in errors)
+
+
+def test_fan_in_requires_every_cluster_owner_terminal(tmp_path):
+    data = _manifest(tmp_path)
+    data["root_cause_clusters"][0]["owner"] = "specialist-lane"
+    errors = validate_review_workflow(data, phase="fan-in")
+    assert any("specialist-lane" in error and "terminal" in error for error in errors)
+
+
+def test_fan_in_requires_passed_receipt_for_every_cluster(tmp_path):
+    data = _manifest(tmp_path)
+    data["root_cause_clusters"].append({
+        "id": "RC2", "finding_ids": ["grok:R1"],
+        "owner": "implementation-lane", "test": "tests/test_other.py",
+    })
+    errors = validate_review_workflow(data, phase="fan-in")
+    assert any("RC2" in error and "test receipt" in error for error in errors)
+
+
+def test_live_gate_forces_untracked_files_visible(tmp_path):
+    repo, worktree = _linked_worktree(tmp_path)
+    _git(repo, "config", "status.showUntrackedFiles", "no")
+    (worktree / "hidden.txt").write_text("hidden", encoding="utf-8")
+    data = _manifest(tmp_path)
+    data["implementation"]["worktree"] = str(worktree)
+    data["base_commit"] = _head(worktree)
+    errors = validate_live_git(data, phase="start", repo=worktree)
+    assert any("clean ではない" in error for error in errors)
+
+
+def test_live_fan_in_rejects_empty_descendant_commit(tmp_path):
+    _, worktree = _linked_worktree(tmp_path)
+    base = _head(worktree)
+    _git(worktree, "commit", "--allow-empty", "-qm", "empty")
+    data = _manifest(tmp_path)
+    data["base_commit"] = base
+    data["implementation"]["worktree"] = str(worktree)
+    data["fan_in"]["commit_sha"] = _head(worktree)
+    errors = validate_live_git(data, phase="fan-in", repo=worktree)
+    assert any("変更ファイルが無い" in error for error in errors)
+
+
+def test_live_fan_in_rejects_transient_unowned_commit(tmp_path):
+    _, worktree = _linked_worktree(tmp_path)
+    base = _head(worktree)
+    (worktree / "outside.txt").write_text("temporary", encoding="utf-8")
+    _git(worktree, "add", "outside.txt")
+    _git(worktree, "commit", "-qm", "touch unowned")
+    (worktree / "outside.txt").unlink()
+    (worktree / "owned.py").write_text("owned", encoding="utf-8")
+    _git(worktree, "add", "outside.txt", "owned.py")
+    _git(worktree, "commit", "-qm", "restore tree and implement")
+    data = _manifest(tmp_path)
+    data["base_commit"] = base
+    data["implementation"]["worktree"] = str(worktree)
+    data["implementation"]["owned_files"] = ["owned.py"]
+    data["fan_in"]["commit_sha"] = _head(worktree)
+    errors = validate_live_git(data, phase="fan-in", repo=worktree)
+    assert any("owned_files 外" in error and "outside.txt" in error for error in errors)

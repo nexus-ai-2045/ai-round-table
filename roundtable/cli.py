@@ -379,7 +379,7 @@ def _cmd_workflow_gate(args) -> int:
     """独立review成果物を開始／fan-in gateとして検査する。"""
     try:
         data = load_manifest(Path(args.manifest))
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError) as exc:
         print(f"[workflow-gate failed] manifest を読めない: {exc}")
         return 1
     errors = validate_review_workflow(data, phase=args.phase)
