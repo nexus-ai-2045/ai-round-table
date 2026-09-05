@@ -27,8 +27,10 @@ def _seeded_repo(tmp_path, name="main"):
     (repo / "seed.txt").write_text("seed", encoding="utf-8")
     _git(repo, "add", "seed.txt")
     _git(repo, "commit", "-qm", "seed")
-    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
-    _git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+    remote = tmp_path / f"{name}-remote.git"
+    subprocess.run(["git", "init", "--bare", "-qb", "main", str(remote)], check=True)
+    _git(repo, "remote", "add", "origin", str(remote))
+    _git(repo, "push", "-q", "-u", "origin", "main")
     return repo
 
 
@@ -333,8 +335,12 @@ def test_cli_rejects_non_utf8_manifest_without_traceback(tmp_path, capsys):
 
 def test_start_gate_rejects_actual_nonstandard_default_branch(tmp_path):
     repo, worktree = _linked_worktree(tmp_path, branch="trunk")
-    _git(repo, "update-ref", "refs/remotes/origin/trunk", "refs/remotes/origin/main")
-    _git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/trunk")
+    _git(repo, "push", "-q", "origin", "HEAD:refs/heads/trunk")
+    remote = tmp_path / "main-remote.git"
+    subprocess.run(
+        ["git", "--git-dir", str(remote), "symbolic-ref", "HEAD", "refs/heads/trunk"],
+        check=True,
+    )
     data = _manifest(tmp_path)
     data["implementation"]["branch"] = "trunk"
     data["implementation"]["worktree"] = str(worktree)
@@ -345,12 +351,27 @@ def test_start_gate_rejects_actual_nonstandard_default_branch(tmp_path):
 
 def test_start_gate_fails_closed_when_default_branch_is_unknown(tmp_path):
     repo, worktree = _linked_worktree(tmp_path)
-    _git(repo, "symbolic-ref", "--delete", "refs/remotes/origin/HEAD")
+    _git(repo, "remote", "remove", "origin")
     data = _manifest(tmp_path)
     data["implementation"]["worktree"] = str(worktree)
     data["base_commit"] = _head(worktree)
     errors = validate_live_git(data, phase="start", repo=worktree)
     assert any("default branch" in error and "判定できない" in error for error in errors)
+
+
+def test_start_gate_does_not_trust_stale_origin_head(tmp_path):
+    repo = _seeded_repo(tmp_path)
+    _git(repo, "update-ref", "refs/remotes/origin/master", "HEAD")
+    _git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/master")
+    _git(repo, "checkout", "--detach", "-q")
+    worktree = tmp_path / "wt"
+    _git(repo, "worktree", "add", "-q", str(worktree), "main")
+    data = _manifest(tmp_path)
+    data["implementation"]["branch"] = "main"
+    data["implementation"]["worktree"] = str(worktree)
+    data["base_commit"] = _head(worktree)
+    errors = validate_live_git(data, phase="start", repo=worktree)
+    assert any("default branch (main)" in error for error in errors)
 
 
 def test_fan_in_requires_every_cluster_owner_terminal(tmp_path):

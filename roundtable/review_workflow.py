@@ -57,11 +57,6 @@ def _qualify(reviewer: str, finding_id: str) -> str:
 
 def _default_branch(repo: Path) -> str | None:
     """remote の実体から default branch を取る。判定不能は fail-closed 用に None。"""
-    local = _git(repo, "symbolic-ref", "--short", "refs/remotes/origin/HEAD")
-    if local.returncode == 0:
-        ref = local.stdout.strip()
-        if ref.startswith("origin/") and len(ref) > len("origin/"):
-            return ref[len("origin/"):]
     try:
         remote = subprocess.run(
             ["git", "-C", str(repo), "ls-remote", "--symref", "origin", "HEAD"],
