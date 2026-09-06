@@ -12,6 +12,12 @@
    "round": 2,
    "state": "merged",
    "detail": ""
+  },
+  "03af697e20ae": {
+   "participant": "claude",
+   "round": 3,
+   "state": "prepared",
+   "detail": ""
   }
  },
  "human_actions": [
