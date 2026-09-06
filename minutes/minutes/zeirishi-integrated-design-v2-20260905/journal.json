@@ -16,7 +16,7 @@
   "03af697e20ae": {
    "participant": "claude",
    "round": 3,
-   "state": "prepared",
+   "state": "output-received",
    "detail": ""
   }
  },
