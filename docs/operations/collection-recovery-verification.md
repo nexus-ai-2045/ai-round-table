@@ -11,10 +11,10 @@
 
 | 対象 | 状態と次の行動 |
 |---|---|
-| 製品修正と配布CLI | PR #22へ提出済み。固定wheelを通常CLIへ導入し、ソース一致とcheckout外の起動・回収を確認 |
+| 製品修正と配布CLI | PR #22をmerge済み。正式mainと固定wheelのコード一致、checkout外の起動・回収を確認 |
 | CI | WindowsのCLI出力とテスト隔離ガードを修復済み。最新HEADの両OS成功を受入条件とし、結果の正本は[PR #22のChecks](https://github.com/nexus-ai-2045/ai-round-table/pull/22/checks)とする |
-| Mac cmuxの実往復・本部返却 | 共通候補で成功。回答1件・再回収不変・本部の読取と記録反映まで確認 |
-| 共通基盤の正式反映 | Projects PR #725。既存の本部担当が保持し、承認後のmerge・限定したroot反映・実測を残す |
+| Mac cmuxの実往復・本部返却 | 正式wrapperと通常CLIで搬送・回答1件・再回収不変・正式タスク通知の受理を確認。本部による読取・運用証拠への採用も確認 |
+| 共通基盤の正式反映 | Projects PR #725を本部がmergeし、通常rootへ限定反映済み。他担当差分の保全と正式importを確認 |
 | Claude Desktop指定席 | 操作接続障害で未検証。指定席の復旧後に1依頼・1回答を検証する |
 | 休止中座長の常設自動再開 | 未接続。正式タスク送信とその後の実処理は確認済みだが、常設の自動再開とは扱わない |
 
@@ -22,7 +22,7 @@
 
 - branch: `fix/collection-recovery-clean-20260906`
 - base: `baaeeeff4da575e7bdf68d7bbfa88556c44a0048`
-- 提出先: [PR #22](https://github.com/nexus-ai-2045/ai-round-table/pull/22)。mergeは未実施。以下の日付別試験は当時の差分に対する記録です。
+- 提出先: [PR #22](https://github.com/nexus-ai-2045/ai-round-table/pull/22)。当時はmerge未実施。以下の日付別試験は当時の差分に対する記録です。
 - 全体試験: `python3 -m pytest -q --basetemp=.pytest-tmp-final` → **299 passed in 104.88s**。
 - `git diff --check`: 成功。
 - 独立Pythonレビュー: 生存ロックのmtime失効問題を検出・修正後、残P1/P2なし。
@@ -137,3 +137,22 @@ busyな送信を待たず別回答を回収する巡回と、scratch欠落時の
 固定wheelを再導入し、配布版のPythonファイル20件とソースの一致、非UTF-8標準出力でのCLI起動、
 role_hint内のパスを保持したsnapshot固定、繰り返し回収時の確定搬出履歴の保持をcheckout外で確認しました。
 この追加スモークは外部送信を行わず、先述の実AI往復とは分けて扱います。
+
+## 正式反映と通常環境の実測（2026-09-08）
+
+- 製品PR #22のmerge: `4ce4bf177e4b140ae0bb18615c05f5a5d494bb13`。
+- 最新機能版のWindows・Ubuntu CIは各399件成功（隔離ガード7件、本試験392件）。
+- 共通Projects PR #725のmerge: `072f02da7623796b018f1e49787b335d99196b89`。
+  本部が既存6commitと他担当の作業差分を保全し、通常root `d89c965eca78fafa4fcb860ce1785e919fd4ab6a`へ反映。
+- 通常の `Projects/shared/scripts/cmux_file_signal.py` と配布CLIで、専用Astra実席へ搬送成功。
+  invocation `e3fe19a47f10` の回答を1件採用し、再回収で議事録が変わらないことを確認。
+- 元担当への通知は正式なタスク送信で受理され、実呼出しに対応するreceiptを保存。
+  重複claimはresend-forbiddenで拒否。本部が議事録を読み、正式環境の往復証拠として採用した返答も回収。
+  受理と担当側の実処理をそれぞれ確認した。
+- 正本checkoutはmainへ同期しclean。初期実装の残差分は正式版への包含を確認して外部保全。
+  今回の旧作業worktreeは68,527ファイルをarchiveと照合後に除去し、提出branch・旧試験branchを整理。
+  Git履歴はverify済みbundleへ保全。他担当の議事録worktreeと独立PR #21は保持。
+
+通常の更新・切替・復旧は[Mac受渡し手順](mac-handoff.md)の正本と切替に従います。
+Claude Desktop指定席は操作接続障害のため未検証。常設の自動起動も未接続であり、
+正式cmux経路の成功だけでこれらを完了扱いしません。
