@@ -740,5 +740,14 @@ def main(argv: list[str] | None = None) -> int:
         return 4
 
 
+def entrypoint() -> int:
+    """プロセスのCLI入口は日本語・JSONをUTF-8で出力する。"""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8")
+    return main()
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(entrypoint())

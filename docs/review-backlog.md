@@ -652,3 +652,7 @@ Independent 17.2 / Decentralized 7.8 / Centralized 4.4 という**数値の一�
 試験のbasetemp誤指定で発生したローカルの議事録commitは保全branchへ分離し、提出branchは元のPR HEADから復旧した。
 試験履歴はリモートへ送っていない。再発防止として、checkout内のgitignore対象外basetempをfixture生成前に拒否する。
 製品branchのHEAD不変と拒否・許可条件の回帰を確認した。
+
+配布版CIのWindows実行で日本語helpのUnicodeEncodeErrorを検出した。プロセスのCLI入口だけで
+stdout/stderrをUTF-8へ設定し、console scriptと`python -m`の両入口を統一した。
+ライブラリとして呼ぶ`main(argv)`は変更せず、cp1252環境を再現する2回帰と独立レビューが通った。
