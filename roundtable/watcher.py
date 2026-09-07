@@ -1,6 +1,6 @@
 """scratch 監視 → 検証 → merge。dispatcher の回収側の心臓部。
 
-失敗分類 (journal.set_state の detail / 戻り値 reason に使う):
+待機・失敗分類 (journal.set_state の detail / 戻り値 reason に使う):
     timeout      出力ファイルが timeout_s 以内に出現しなかった (`.tmp` も無い = 席が無応答)
     stalled-tmp  `<inv>.json.tmp` は在るのに確定 (rename) されず、中身も採用条件を満たさない
     parse        JSON parse 不能、または parse 後の型が dict でない (配列/null 等)
@@ -19,9 +19,12 @@ CEO 出力の両方に必ず残す。書きかけを拾わないよう、grace �
 確認した上で JSON parse + id 照合 + schema 検証を全部通す。
 """
 import json
+import math
+import re
 import time
 
 from . import minutes as m
+from .filelock import AdvisoryFileLock
 from .journal import Journal
 from .paths import TopicPaths
 from .schema import validate_opinion
@@ -77,7 +80,7 @@ def _load_tmp_candidate(
     return data, ""
 
 
-def collect(
+def _collect_ready(
     tp: TopicPaths,
     journal: Journal,
     inv_id: str,
@@ -97,7 +100,7 @@ def collect(
     現在は git の clean 検査 (D12 / roundtable.ledger) とロックで、「他 dispatcher の
     正当な追記 (commit 済み = clean)」と「dispatcher 外の書き換え (dirty)」を分ける。
 
-    timeout に達した時は `.json` が無いというだけで failed:timeout にせず、
+    timeout に達した時は `.json` が無いというだけで終端失敗にせず、
     `<inv>.json.tmp` の有無と中身を見て「無応答」と「rename 漏れ」を分ける。
     tmp_stable_s は書きかけ判定の grace (この間に内容が変われば採用しない)。
     """
@@ -116,24 +119,28 @@ def collect(
             continue
         # --- timeout 到達。ここで .tmp を見る (見ないと偽陰性になる) ---
         if not tmp.exists():
+            if journal.data["invocations"][inv_id]["state"] in {"validated", "output-received"}:
+                return {"ok": False, "reason": "missing-response"}
             if preserve_delivery_unknown:
                 # turn/start の応答を失った呼び出しは、後から成果物が届きうる。
                 # failed 終端へ進めず、明示 collect で回収できる状態を保つ。
                 return {"ok": False, "reason": "delivery-unknown"}
-            journal.set_state(inv_id, "failed", "timeout")
+            journal.set_state(inv_id, "waiting", "timeout")
             return {"ok": False, "reason": "timeout"}
         candidate, why = _load_tmp_candidate(tmp, inv_id, participant, clock, tmp_stable_s)
         if out.exists():
             break  # grace 中に席が rename を完了した → 通常経路で読み直す
         if candidate is None:
-            journal.set_state(inv_id, "failed", f"stalled-tmp: {why}")
+            if journal.data["invocations"][inv_id]["state"] not in {"validated", "output-received"}:
+                journal.set_state(inv_id, "waiting", f"stalled-tmp: {why}")
             return {"ok": False, "reason": "stalled-tmp", "tmp": str(tmp), "detail": why}
         data = candidate
         recovered = True
         break
 
     provenance = f"{RECOVERED_FROM_TMP}: {tmp.name}" if recovered else ""
-    journal.set_state(inv_id, "output-received", provenance)
+    if journal.data["invocations"][inv_id]["state"] != "validated":
+        journal.set_state(inv_id, "output-received", provenance)
 
     if data is None:  # 通常経路 (.json が確定している)
         for attempt in range(3):  # grace retry: 部分書き込み・AV 一時ロックの吸収
@@ -157,9 +164,18 @@ def collect(
         journal.set_state(inv_id, "failed", "schema: " + "; ".join(errs))
         return {"ok": False, "reason": "schema"}
 
+    rec = journal.data["invocations"][inv_id]
+    digest = m.opinion_hash(data)
+    if rec.get("response_sha256") not in {None, digest}:
+        journal.set_state(inv_id, "failed", "response-changed")
+        return {"ok": False, "reason": "response-changed"}
+    rec["response_sha256"] = digest
     journal.set_state(inv_id, "validated", provenance)
     try:
-        m.merge_opinion(tp, data, journal.round_no)  # 照合はロック配下で証跡と行う
+        m.merge_opinion(tp, data, rec["round"])  # 照合はロック配下で証跡と行う
+    except m.OpinionConflictError:
+        journal.set_state(inv_id, "failed", "response-conflict")
+        return {"ok": False, "reason": "response-conflict"}
     except m.MinutesTamperedError:
         journal.set_state(inv_id, "failed", "tampered")
         return {"ok": False, "reason": "tampered"}
@@ -171,3 +187,73 @@ def collect(
         # .tmp は消さない: 何を採用したかの物証を残す (dispatcher は席の契約成果物を捏造しない)。
         return {"ok": True, "recovered": "tmp", "tmp": str(tmp)}
     return {"ok": True}
+
+
+def _invocation_lock(tp: TopicPaths, inv_id: str) -> AdvisoryFileLock:
+    if not re.fullmatch(r"[a-zA-Z0-9_-]+", inv_id):
+        raise ValueError("invalid invocation id")
+    return AdvisoryFileLock(tp.lock(f"collect-{inv_id}"))
+
+
+def cancel(tp: TopicPaths, inv_id: str) -> dict:
+    """回収を取り消す。席のプロセスや休止中 Codex は操作しない。"""
+    with _invocation_lock(tp, inv_id):
+        journal = Journal.load(tp)
+        rec = journal.data["invocations"].get(inv_id)
+        if rec is None:
+            return {"ok": False, "reason": "unknown-invocation"}
+        if rec["state"] == "cancelled":
+            return {"ok": True, "reason": "cancelled"}
+        if rec["state"] in {"merged", "failed"}:
+            return {"ok": False, "reason": rec["state"]}
+        if rec.get("response_sha256") and m.has_response(
+            tp, inv_id, rec["participant"], rec["response_sha256"]
+        ):
+            journal.set_state(inv_id, "merged", "recovered-committed-response")
+            return {"ok": False, "reason": "merged"}
+        journal.set_state(inv_id, "cancelled", "collection-cancelled; seat-not-stopped")
+        return {"ok": True, "reason": "cancelled"}
+
+
+def collect(
+    tp: TopicPaths,
+    journal: Journal,
+    inv_id: str,
+    participant: str,
+    timeout_s: float = 900,
+    poll_s: float = 2.0,
+    clock=time,
+    tmp_stable_s: float = 1.0,
+    preserve_delivery_unknown: bool = False,
+) -> dict:
+    """bounded poll。待機中は lock を解放し、取消と別 collector を受け付ける。
+
+    再起動後は同じ invocation を指定して再実行する。merge と journal 更新の
+    間で中断しても、minutes の同一書込み receipt で追記を重複させない。
+    """
+    if not all(math.isfinite(v) for v in (timeout_s, poll_s, tmp_stable_s)):
+        raise ValueError("wait values must be finite")
+    if timeout_s < 0 or poll_s <= 0 or tmp_stable_s < 0:
+        raise ValueError("timeout/stability must be nonnegative and poll must be positive")
+    deadline = clock.monotonic() + timeout_s
+    while True:
+        with _invocation_lock(tp, inv_id):
+            # 未保存の古い snapshot を重ねず、ここから先は disk が正本。
+            journal.data = Journal.load(tp).data
+            rec = journal.data["invocations"].get(inv_id)
+            if rec is None:
+                return {"ok": False, "reason": "unknown-invocation"}
+            if rec["participant"] != participant:
+                return {"ok": False, "reason": "participant-mismatch"}
+            if rec["state"] == "merged":
+                return {"ok": True}
+            if rec["state"] == "cancelled":
+                return {"ok": False, "reason": "cancelled"}
+            if rec["state"] == "failed" and not journal.reopen_wait_failure(inv_id):
+                return {"ok": False, "reason": "failed", "detail": rec.get("detail", "")}
+            out = tp.scratch / f"{inv_id}.json"
+            if out.exists() or clock.monotonic() >= deadline:
+                return _collect_ready(tp, journal, inv_id, participant, timeout_s=0,
+                                      poll_s=poll_s, clock=clock, tmp_stable_s=tmp_stable_s,
+                                      preserve_delivery_unknown=preserve_delivery_unknown)
+        clock.sleep(min(poll_s, max(0, deadline - clock.monotonic())))

@@ -27,7 +27,7 @@ def validate_opinion(data) -> list[str]:
             continue
         if not isinstance(c.get("claim"), str) or not c.get("claim"):
             errs.append(f"claims[{i}].claim: 非空文字列が必要")
-        if c.get("evidence_type") not in EVIDENCE_TYPES:
+        if not isinstance(c.get("evidence_type"), str) or c["evidence_type"] not in EVIDENCE_TYPES:
             errs.append(f"claims[{i}].evidence_type: {sorted(EVIDENCE_TYPES)} のいずれか")
         if not isinstance(c.get("evidence"), str):
             errs.append(f"claims[{i}].evidence: 文字列が必要")

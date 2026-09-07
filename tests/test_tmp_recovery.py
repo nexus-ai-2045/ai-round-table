@@ -83,7 +83,7 @@ def test_timeout_stays_timeout_when_no_tmp(tmp_path):
     r = watcher.collect(tp, j, inv, "codex", timeout_s=0, clock=_Clock())
 
     assert r == {"ok": False, "reason": "timeout"}
-    assert j.failure_stats() == {"timeout": 1}
+    assert j.data["invocations"][inv]["state"] == "waiting"
 
 
 def test_tmp_renamed_during_grace_uses_normal_path(tmp_path):
@@ -118,7 +118,7 @@ def test_partial_tmp_is_not_adopted(tmp_path):
     assert r["reason"] == "stalled-tmp"
     assert not j.is_merged(inv)
     assert "### codex" not in tp.minutes.read_text(encoding="utf-8")
-    assert j.failure_stats() == {"stalled-tmp": 1}
+    assert j.data["invocations"][inv]["state"] == "waiting"
 
 
 def test_tmp_still_growing_is_not_adopted(tmp_path):

@@ -1,4 +1,4 @@
-# ai-round-table
+# ai-round-table：複数AIの議論と回答回収
 
 **人間が座長を務める、マルチ AI 円卓のディスパッチャ。**
 
@@ -38,6 +38,13 @@
 **dispatcher は AI を実行しない。** 議題 packet を配って議事録を束ねるだけの決定的なツール。
 
 ## 使い方（できること）
+
+Macでは `uv tool install /absolute/path/to/ai-round-table` で
+`ai-roundtable` コマンドを登録できます。作業ディレクトリへの参照を残さず導入するため、
+導入後にソースを変更した場合は再インストールします。開発中に変更を即時反映したい場合だけ
+`--editable` を追加します。登録後はリポジトリ外から
+`ai-roundtable --help` を使えます。以下の `python -m roundtable.cli` と同じ入口です。
+回収後に元担当へ結果を戻す手順は [担当への返却](docs/operations/coordinator-followup.md) を参照してください。
 
 ```bash
 # 0. 環境診断（Tier1 が使えるか）
@@ -141,6 +148,10 @@ Tier1 が失敗したら**自動で Tier3 に落ちる**（勝手に Tier2 へ�
 | [docs/PROTOCOL.md](docs/PROTOCOL.md) | 席と dispatcher の間の契約 |
 | [docs/adr/](docs/adr/) | アーキテクチャ決定記録（0001: 公式 Codex SDK への段階移行） |
 | [docs/operations/](docs/operations/) | 運用記録 |
+| [回答の発見・回収と担当再開](docs/operations/collection-recovery.md) | 有限待機、遅着回収、取消、再開の保証境界 |
+| [Macの席への受渡し](docs/operations/mac-handoff.md) | handoff / handoff-status、送達不明時の再送防止 |
+| [Mac優先のDesktop接続](docs/operations/mac-desktop-connection.md) | CMUX・Round Table・Claude Desktop Codeの接続と保証範囲 |
+| [CMUXの4席案](docs/operations/cmux-four-ai-proposal.md) | 入口調査と採否後の最小スモーク案 |
 | [docs/review-backlog.md](docs/review-backlog.md) | レビュー指摘と対応の記録（撤回した判断も含む） |
 | [docs/plans/](docs/plans/) | 実装計画 |
 | [SECURITY.md](SECURITY.md) | 脅威モデル |

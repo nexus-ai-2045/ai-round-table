@@ -1,0 +1,124 @@
+"""再起動時の発見、有限待機、取消と再開能力の境界をCLIで確認する。"""
+import json
+
+import pytest
+
+from roundtable import minutes
+from roundtable.cli import main
+from roundtable.journal import Journal
+from roundtable.paths import ensure_topic
+
+
+def setup_topic(root):
+    tp = ensure_topic(root, 't1')
+    minutes.create(tp, '回収検証', ['codex'])
+    inv = Journal.load(tp).new_invocation('codex', 1)
+    return tp, inv
+
+
+def write_reply(tp, inv, **overrides):
+    opinion = {'invocation_id': inv, 'participant': 'codex', 'opinion': '回答',
+               'claims': [{'claim': 'A', 'evidence_type': 'argument', 'evidence': 'B'}]}
+    opinion.update(overrides)
+    (tp.scratch / f'{inv}.json').write_text(json.dumps(opinion), encoding='utf-8')
+
+
+def scan(root, *extra):
+    return main(['collect-pending', 't1', '--root', str(root), *extra])
+
+
+def test_restart_discovers_existing_reply_and_never_claims_resume(tmp_path):
+    tp, inv = setup_topic(tmp_path)
+    write_reply(tp, inv)
+    assert scan(tmp_path) == 0
+    receipt = json.loads(tp.last_result.read_text())
+    assert receipt['merged'] == [inv]
+    assert receipt['follow_up']['resume_executed'] is False
+    original = tp.minutes.read_bytes()
+    # 別呼出しはdiskから読み直す。mtimeや前回のメモリには依存しない。
+    assert scan(tmp_path) == 0
+    assert tp.minutes.read_bytes() == original
+    assert json.loads(tp.last_result.read_text())['follow_up']['invocations'] == [inv]
+
+
+def test_pending_is_not_success_and_late_reply_is_discovered(tmp_path):
+    tp, inv = setup_topic(tmp_path)
+    assert scan(tmp_path) == 2
+    assert json.loads(tp.last_result.read_text())['pending'] == [inv]
+    write_reply(tp, inv)
+    assert scan(tmp_path) == 0
+    assert Journal.load(tp).is_merged(inv)
+
+
+def test_one_bad_reply_does_not_hide_other_ready_reply(tmp_path):
+    tp, inv = setup_topic(tmp_path)
+    other = Journal.load(tp).new_invocation('codex', 1)
+    write_reply(tp, inv, invocation_id='wrong')
+    write_reply(tp, other)
+    assert scan(tmp_path) == 1
+    receipt = json.loads(tp.last_result.read_text())
+    assert receipt['failed'][0]['invocation'] == inv
+    assert other in receipt['merged']
+
+
+def test_cancelled_late_reply_is_not_collected(tmp_path):
+    tp, inv = setup_topic(tmp_path)
+    assert main(['cancel', 't1', '--invocation', inv, '--root', str(tmp_path)]) == 0
+    write_reply(tp, inv)
+    assert scan(tmp_path) == 0
+    receipt = json.loads(tp.last_result.read_text())
+    assert receipt['cancelled'] == [inv]
+    assert receipt['merged'] == []
+
+
+def test_legacy_timeout_is_reported_not_automatically_reopened(tmp_path):
+    tp, inv = setup_topic(tmp_path)
+    Journal.load(tp).set_state(inv, 'failed', 'timeout')
+    write_reply(tp, inv)
+    assert scan(tmp_path) == 1
+    assert not Journal.load(tp).is_merged(inv)
+
+
+@pytest.mark.parametrize('flag,value', [('--timeout', 'nan'), ('--timeout', 'inf'),
+                                      ('--timeout', '-1'), ('--poll-interval', '0')])
+def test_invalid_wait_is_rejected_before_creating_topic(tmp_path, flag, value):
+    with pytest.raises(SystemExit) as exc:
+        scan(tmp_path, flag, value)
+    assert exc.value.code == 2
+    assert not (tmp_path / 'minutes').exists()
+
+
+def test_unhashable_evidence_type_returns_schema_error(tmp_path):
+    tp, inv = setup_topic(tmp_path)
+    write_reply(tp, inv, claims=[{'claim': 'A', 'evidence_type': [], 'evidence': 'B'}])
+    assert scan(tmp_path) == 1
+    assert json.loads(tp.last_result.read_text())['failed'][0]['detail'].startswith('schema')
+
+
+@pytest.mark.parametrize('state', ['output-received', 'validated'])
+def test_incomplete_reply_after_crash_is_rechecked_within_same_wait(tmp_path, monkeypatch, state):
+    from roundtable import cli
+
+    tp, inv = setup_topic(tmp_path)
+    Journal.load(tp).set_state(inv, state)
+    (tp.scratch / f'{inv}.json.tmp').write_text('{', encoding='utf-8')
+
+    class Clock:
+        now = 0
+
+        def monotonic(self):
+            return self.now
+
+        def sleep(self, seconds):
+            self.now += seconds
+            write_reply(tp, inv)
+
+    monkeypatch.setattr(cli, 'time', Clock())
+    assert scan(tmp_path, '--timeout', '3', '--poll-interval', '1') == 0
+    assert Journal.load(tp).is_merged(inv)
+
+
+def test_mistyped_root_is_not_reported_settled_or_created(tmp_path, capsys):
+    assert scan(tmp_path) == 2
+    assert 'unknown-topic' in capsys.readouterr().out
+    assert not (tmp_path / 'minutes').exists()
