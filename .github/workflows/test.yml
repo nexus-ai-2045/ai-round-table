@@ -44,7 +44,11 @@ jobs:
           git config --global init.defaultBranch main
 
       - name: install
-        run: python -m pip install --upgrade pip pytest
+        run: python -m pip install --upgrade pip pytest .
+
+      - name: installed CLI smoke
+        # 配布依存とconsole入口を、source checkout外から検査する。
+        run: python -c "import tempfile, subprocess; from importlib.metadata import requires; assert requires('ai-roundtable'); import yaml; subprocess.run(['ai-roundtable', '--help'], cwd=tempfile.gettempdir(), check=True)"
 
       - name: pytest
         # 「python -m」が必須（cwd を sys.path に積んで import roundtable を解決する。

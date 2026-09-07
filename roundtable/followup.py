@@ -14,6 +14,12 @@ from .paths import TopicPaths
 from .watcher import _invocation_lock
 
 
+def _thread_id(value: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError("thread ID must be a UUID string")
+    return str(uuid.UUID(value))
+
+
 def _hash(raw: bytes) -> str:
     return hashlib.sha256(raw).hexdigest()
 
@@ -65,7 +71,7 @@ def _result(record: dict[str, Any], **extra: Any) -> dict[str, Any]:
 
 def prepare(tp: TopicPaths, inv: str, target_thread_id: str) -> dict[str, Any]:
     """検証済み回答へのローカルpointerを、不変の宛先へ結び付ける。"""
-    target = str(uuid.UUID(target_thread_id))
+    target = _thread_id(target_thread_id)
     with _invocation_lock(tp, inv):
         digest = _evidence(tp, inv)
         old = _load(tp, inv)
@@ -119,12 +125,13 @@ def record_delivery(tp: TopicPaths, inv: str, target_thread_id: str,
         record = _load(tp, inv)
         if record is None or record["state"] != "sending":
             raise ValueError("claimed followup required")
-        if (target_thread_id != record["target_thread_id"]
+        target = _thread_id(target_thread_id)
+        if (target != record["target_thread_id"]
                 or message_sha256 != record["message_sha256"]):
             raise ValueError("delivery identity mismatch")
         if (not isinstance(receipt, dict) or receipt.get("accepted") is not True
                 or receipt.get("action") != "send_message_to_thread"
-                or receipt.get("thread_id") != target_thread_id
+                or _thread_id(receipt.get("thread_id")) != target
                 or receipt.get("message_sha256") != message_sha256
                 or not isinstance(receipt.get("source_call_id"), str)
                 or not receipt["source_call_id"].strip()):
@@ -132,6 +139,7 @@ def record_delivery(tp: TopicPaths, inv: str, target_thread_id: str,
         # 本文や任意tool出力を保存せず、対応に必要な値だけを保持する。
         record["receipt"] = {k: receipt[k] for k in (
             "accepted", "action", "thread_id", "message_sha256", "source_call_id")}
+        record["receipt"]["thread_id"] = target
         record["state"] = "submitted"
         _save(_paths(tp, inv)[1], record)
         return _result(record)

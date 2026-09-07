@@ -189,10 +189,10 @@ def _collect_ready(
     return {"ok": True}
 
 
-def _invocation_lock(tp: TopicPaths, inv_id: str) -> AdvisoryFileLock:
+def _invocation_lock(tp: TopicPaths, inv_id: str, **kwargs) -> AdvisoryFileLock:
     if not re.fullmatch(r"[a-zA-Z0-9_-]+", inv_id):
         raise ValueError("invalid invocation id")
-    return AdvisoryFileLock(tp.lock(f"collect-{inv_id}"))
+    return AdvisoryFileLock(tp.lock(f"collect-{inv_id}"), **kwargs)
 
 
 def cancel(tp: TopicPaths, inv_id: str) -> dict:
@@ -225,6 +225,7 @@ def collect(
     clock=time,
     tmp_stable_s: float = 1.0,
     preserve_delivery_unknown: bool = False,
+    lock_timeout_s: float | None = None,
 ) -> dict:
     """bounded poll。待機中は lock を解放し、取消と別 collector を受け付ける。
 
@@ -236,8 +237,11 @@ def collect(
     if timeout_s < 0 or poll_s <= 0 or tmp_stable_s < 0:
         raise ValueError("timeout/stability must be nonnegative and poll must be positive")
     deadline = clock.monotonic() + timeout_s
+    lock_options = {} if lock_timeout_s is None else {"timeout_s": lock_timeout_s}
+    if lock_timeout_s is not None and (not math.isfinite(lock_timeout_s) or lock_timeout_s < 0):
+        raise ValueError("lock timeout must be finite and nonnegative")
     while True:
-        with _invocation_lock(tp, inv_id):
+        with _invocation_lock(tp, inv_id, **lock_options):
             # 未保存の古い snapshot を重ねず、ここから先は disk が正本。
             journal.data = Journal.load(tp).data
             rec = journal.data["invocations"].get(inv_id)
@@ -251,6 +255,13 @@ def collect(
                 return {"ok": False, "reason": "cancelled"}
             if rec["state"] == "failed" and not journal.reopen_wait_failure(inv_id):
                 return {"ok": False, "reason": "failed", "detail": rec.get("detail", "")}
+            # commit済みの採用結果をscratchより先に照合する。停止後にscratchが
+            # 差し替わったり消えても、採用済み回答を失敗へ巻き戻さない。
+            if rec["state"] == "validated" and rec.get("response_sha256") and m.has_response(
+                tp, inv_id, participant, rec["response_sha256"]
+            ):
+                journal.set_state(inv_id, "merged", "recovered-committed-response")
+                return {"ok": True, "reason": "recovered-committed-response"}
             out = tp.scratch / f"{inv_id}.json"
             if out.exists() or clock.monotonic() >= deadline:
                 return _collect_ready(tp, journal, inv_id, participant, timeout_s=0,

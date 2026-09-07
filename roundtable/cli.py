@@ -121,83 +121,92 @@ def _cmd_dispatch(args) -> int:
             delivered = False
             relay_label = "stdout-only"
         else:
-            seats = load_seats(tp)
-            seat_key = f"rt/{args.slug}/{args.participant}"
-            seat = seats.get(seat_key, {
-                "participant": args.participant,
-                "topic": args.slug,
-                "surface": args.participant,
-                "tier": tier,
-            })
-            seat["topic"] = args.slug
-            seat["thread_name"] = f"rt-{args.slug}-{args.participant}"
-            # cwd は議題ディレクトリに限定する: Tier1 の sandbox 書込範囲がここになる。
-            relay = get_relay(
-                args.participant, tier=tier, allow_fallback=True, cwd=str(tp.root.resolve())  # 相対 --root だと spawn 先で二重解決になる (P2)
-            )
-            try:
-                relay_label = relay.send(seat, text)
-            except DeliveryUnknownError as exc:
-                # thread/start 済みなら、その参照を失うと再実行時に別席へ二重送信する。
-                seat["tier"] = relay.tier
-                seats[seat_key] = seat
-                save_seats(tp, seats)
-                journal.set_state(inv, "delivery-unknown", f"delivery-unknown: {exc}")
-                _write_last_result(
-                    tp,
-                    {
-                        "ok": False,
-                        "reason": "delivery-unknown",
+            delivery_unknown_context = None
+            with watcher._invocation_lock(tp, inv):
+                journal = Journal.load(tp)
+                state = journal.data["invocations"][inv]["state"]
+                if state != "prepared":
+                    payload = {"ok": False, "reason": state,
+                               "invocation": inv, "exit_code": 1}
+                    _write_last_result(tp, payload)
+                    print(json.dumps(payload, ensure_ascii=False))
+                    return 1
+                seats = load_seats(tp)
+                seat_key = f"rt/{args.slug}/{args.participant}"
+                seat = seats.get(seat_key, {
+                    "participant": args.participant,
+                    "topic": args.slug,
+                    "surface": args.participant,
+                    "tier": tier,
+                })
+                seat["topic"] = args.slug
+                seat["thread_name"] = f"rt-{args.slug}-{args.participant}"
+                # cwd は議題ディレクトリに限定する: Tier1 の sandbox 書込範囲がここになる。
+                relay = get_relay(
+                    args.participant, tier=tier, allow_fallback=True, cwd=str(tp.root.resolve())  # 相対 --root だと spawn 先で二重解決になる (P2)
+                )
+                try:
+                    relay_label = relay.send(seat, text)
+                except DeliveryUnknownError as exc:
+                    # thread/start 済みなら、その参照を失うと再実行時に別席へ二重送信する。
+                    seat["tier"] = relay.tier
+                    seats[seat_key] = seat
+                    save_seats(tp, seats)
+                    journal.set_state(inv, "delivery-unknown", f"delivery-unknown: {exc}")
+                    _write_last_result(
+                        tp,
+                        {
+                            "ok": False,
+                            "reason": "delivery-unknown",
+                            "detail": str(exc),
+                            "thread_ref": seat.get("thread_ref"),
+                            "invocation": inv,
+                            "exit_code": 1,
+                        },
+                    )
+                    print(
+                        f"\n[delivery-unknown] invocation: {inv} / {exc}\n"
+                        "[wait] 席が受理済みの可能性があるため、自動再送せず成果物を待ちます。"
+                    )
+                    close_after_delivery_unknown = True
+                    delivery_unknown_context = {
                         "detail": str(exc),
                         "thread_ref": seat.get("thread_ref"),
-                        "invocation": inv,
-                        "exit_code": 1,
-                    },
-                )
-                print(
-                    f"\n[delivery-unknown] invocation: {inv} / {exc}\n"
-                    "[wait] 席が受理済みの可能性があるため、自動再送せず成果物を待ちます。"
-                )
-                close_after_delivery_unknown = True
+                    }
+                except Exception as exc:  # Tier3 失敗など
+                    journal.set_state(inv, "failed", f"relay: {exc}")
+                    _write_last_result(
+                        tp,
+                        {
+                            "ok": False,
+                            "reason": "relay",
+                            "detail": str(exc),
+                            "invocation": inv,
+                            "exit_code": 1,
+                        },
+                    )
+                    print(f"\n[failed] invocation: {inv} / reason: relay / {exc}")
+                    return 1
+                else:
+                    seat["tier"] = relay.tier
+                    seats[seat_key] = seat
+                    save_seats(tp, seats)
+                    journal.set_state(inv, "delivered", f"tier{relay.tier}:{relay_label}")
+                    delivered = True
+                    if relay.tier == 3:
+                        print("\n[clipboard] packet をクリップボードに載せた。席のチャットに貼り付けてください。")
+                        journal.record_human_action("tier3_paste_required", inv)
+                    else:
+                        print(f"\n[tier1] packet を席へ送った (tier={relay.tier}, label={relay_label})。")
+                    if "fallback" in str(relay_label):
+                        print(f"[fallback] Tier1 失敗のため Tier3 に縮退: {relay_label}")
+            if delivery_unknown_context is not None:
+                # collect は同じ lock を取得するため、送信状態を確定してから解放する。
                 return _collect_one(
-                    tp,
-                    journal,
-                    inv,
-                    args.participant,
-                    args.timeout,
-                    delivered=True,
-                    preserve_delivery_unknown=True,
-                    failure_context={
-                        "detail": str(exc),
-                        "thread_ref": seat.get("thread_ref"),
-                    },
+                    tp, journal, inv, args.participant, args.timeout,
+                    delivered=True, preserve_delivery_unknown=True,
+                    failure_context=delivery_unknown_context,
                 )
-            except Exception as exc:  # Tier3 失敗など
-                journal.set_state(inv, "failed", f"relay: {exc}")
-                _write_last_result(
-                    tp,
-                    {
-                        "ok": False,
-                        "reason": "relay",
-                        "detail": str(exc),
-                        "invocation": inv,
-                        "exit_code": 1,
-                    },
-                )
-                print(f"\n[failed] invocation: {inv} / reason: relay / {exc}")
-                return 1
-            seat["tier"] = relay.tier
-            seats[seat_key] = seat
-            save_seats(tp, seats)
-            journal.set_state(inv, "delivered", f"tier{relay.tier}:{relay_label}")
-            delivered = True
-            if relay.tier == 3:
-                print("\n[clipboard] packet をクリップボードに載せた。席のチャットに貼り付けてください。")
-                journal.record_human_action("tier3_paste_required", inv)
-            else:
-                print(f"\n[tier1] packet を席へ送った (tier={relay.tier}, label={relay_label})。")
-            if "fallback" in str(relay_label):
-                print(f"[fallback] Tier1 失敗のため Tier3 に縮退: {relay_label}")
 
         if args.async_dispatch:
             _write_last_result(
@@ -238,7 +247,9 @@ def _collect_one(
     delivered: bool,
     preserve_delivery_unknown: bool = False,
     failure_context: dict | None = None,
+    lock_timeout_s: float | None = None,
 ) -> int:
+    lock_options = {} if lock_timeout_s is None else {"lock_timeout_s": lock_timeout_s}
     result = watcher.collect(
         tp,
         journal,
@@ -246,6 +257,7 @@ def _collect_one(
         participant,
         timeout_s=timeout_s,
         preserve_delivery_unknown=preserve_delivery_unknown,
+        **lock_options,
     )
     if result["ok"]:
         journal.advance_round_if_complete(minutes.parse_participants(tp))
@@ -395,7 +407,10 @@ def _cmd_cancel(args) -> int:
         print(json.dumps({"ok": False, "reason": "unknown-topic", "exit_code": 2}))
         return 2
     tp = ensure_topic(Path(args.root), args.slug)
-    result = watcher.cancel(tp, args.invocation)
+    try:
+        result = watcher.cancel(tp, args.invocation)
+    except ValueError as exc:
+        result = {"ok": False, "reason": "invalid-invocation", "detail": str(exc)}
     payload = {**result, "invocation": args.invocation,
                "exit_code": 0 if result["ok"] else 1}
     _write_last_result(tp, payload)
@@ -418,11 +433,17 @@ def _cmd_collect_pending(args) -> int:
             if inv in attempted or rec["state"] in {"merged", "failed", "cancelled"}:
                 continue
             if not any((tp.scratch / f"{inv}{suffix}").exists()
-                       for suffix in (".json", ".json.tmp")):
+                       for suffix in (".json", ".json.tmp")) and not (
+                           rec["state"] == "validated" and rec.get("response_sha256")
+                       ):
+                continue
+            try:
+                rc = _collect_one(tp, Journal.load(tp), inv, rec["participant"],
+                                  0, delivered=rec["state"] != "prepared", lock_timeout_s=0)
+            except LockTimeout:
+                # 搬出中・他collector使用中の席は、ほかの回答を妨げず次回に回す。
                 continue
             attempted.add(inv)
-            rc = _collect_one(tp, Journal.load(tp), inv, rec["participant"],
-                              0, delivered=rec["state"] != "prepared")
             results[inv] = {"exit_code": rc}
         journal = Journal.load(tp)
         pending = [inv for inv, rec in journal.data["invocations"].items()

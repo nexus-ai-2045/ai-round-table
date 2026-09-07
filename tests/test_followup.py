@@ -87,3 +87,40 @@ def test_missing_minutes_evidence_rejected(tmp_path):
         minutes._write_verified(tp, minutes.TEMPLATE.format(topic="通知", participants="codex"), "fixture")
     with pytest.raises(ValueError, match="evidence"):
         followup.prepare(tp, inv, TARGET)
+
+
+@pytest.mark.parametrize("target_form,receipt_form", [
+    ("upper", "braced"), ("braced", "upper"),
+])
+def test_delivery_accepts_equivalent_uuid_spellings(tmp_path, target_form, receipt_form):
+    tp, inv = setup(tmp_path)
+    canonical = "abcdefab-abcd-4abc-8abc-abcdefabcdef"
+    forms = {"upper": canonical.upper(), "braced": "{" + canonical + "}"}
+    followup.prepare(tp, inv, forms[target_form])
+    claimed = followup.claim(tp, inv)
+    receipt = dict(accepted=True, action="send_message_to_thread",
+                   thread_id=forms[receipt_form], message_sha256=claimed["message_sha256"],
+                   source_call_id="actual-tool-call")
+    result = followup.record_delivery(tp, inv, forms[target_form],
+                                     claimed["message_sha256"], receipt)
+    assert result["state"] == "submitted"
+    assert result["target_thread_id"] == canonical
+    assert result["receipt"]["thread_id"] == canonical
+    assert receipt["thread_id"] == forms[receipt_form]
+
+
+@pytest.mark.parametrize("field,value", [
+    ("target", "invalid"), ("receipt", "invalid"),
+    ("receipt", OTHER), ("receipt", None),
+])
+def test_delivery_invalid_or_different_uuid_rejected(tmp_path, field, value):
+    tp, inv = setup(tmp_path)
+    followup.prepare(tp, inv, TARGET)
+    claimed = followup.claim(tp, inv)
+    receipt = dict(accepted=True, action="send_message_to_thread",
+                   thread_id=value if field == "receipt" else TARGET,
+                   message_sha256=claimed["message_sha256"], source_call_id="actual-tool-call")
+    with pytest.raises(ValueError):
+        followup.record_delivery(tp, inv, value if field == "target" else TARGET,
+                                 claimed["message_sha256"], receipt)
+    assert followup.status(tp, inv)["state"] == "delivery-unknown"
