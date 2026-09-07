@@ -20,7 +20,7 @@ def setup(tmp_path, merged=True):
     if merged:
         data = dict(invocation_id=inv, participant="codex", opinion="秘密の回答本文",
                     claims=[dict(claim="A", evidence_type="argument", evidence="B")])
-        (tp.scratch / f"{inv}.json").write_text(json.dumps(data))
+        (tp.scratch / f"{inv}.json").write_text(json.dumps(data), encoding="utf-8")
         assert watcher.collect(tp, journal, inv, "codex", timeout_s=0)["ok"]
     return tp, inv
 
@@ -29,7 +29,7 @@ def test_prepare_is_idempotent_and_target_immutable(tmp_path):
     tp, inv = setup(tmp_path)
     record = followup.prepare(tp, inv, TARGET)
     assert followup.prepare(tp, inv, TARGET) == record
-    text = Path(record["message_path"]).read_text()
+    text = Path(record["message_path"]).read_text(encoding="utf-8")
     assert "秘密の回答本文" not in text
     assert str(tp.minutes.resolve()) in text
     with pytest.raises(ValueError, match="different target"):
@@ -76,7 +76,7 @@ def test_nonmerged_rejected(tmp_path):
 def test_tampered_message_blocks_claim(tmp_path):
     tp, inv = setup(tmp_path)
     record = followup.prepare(tp, inv, TARGET)
-    Path(record["message_path"]).write_text("tampered")
+    Path(record["message_path"]).write_text("tampered", encoding="utf-8")
     with pytest.raises(ledger.LedgerDirtyError):
         followup.claim(tp, inv)
 

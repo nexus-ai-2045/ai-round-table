@@ -36,11 +36,11 @@ def test_frozen_snapshot_and_role_survive_next_dispatch(tmp_path):
     tp, inv, opts = setup(tmp_path)
     text = handoff.capture_request(tp, inv, packet.build(tp, 'codex', inv, 'SPECIAL ROLE'))
     fixed = (tp.root / 'requests' / f'{inv}.snapshot.md').read_bytes()
-    (tp.snapshot / 'minutes.snapshot.md').write_text('later snapshot')
+    (tp.snapshot / 'minutes.snapshot.md').write_text('later snapshot', encoding='utf-8')
     result = handoff.prepare(tp, inv, **opts)
     assert result['source'] == 'dispatch-captured'
     assert Path(result['snapshot']).read_bytes() == fixed
-    assert 'SPECIAL ROLE' in Path(result['packet']).read_text()
+    assert 'SPECIAL ROLE' in Path(result['packet']).read_text(encoding="utf-8")
     assert str(Path(result['snapshot'])) in text
     assert handoff.prepare(tp, inv, **opts) == result
     with pytest.raises(ValueError, match='different destination'):
@@ -57,7 +57,7 @@ def test_submission_is_not_collection_and_never_repeats(tmp_path, monkeypatch):
             return original(args, **kwargs)
         calls.append(args)
         assert kwargs['shell'] is False and kwargs['timeout'] == 30
-        receipt = json.loads((tp.root / 'deliveries' / f'{inv}.json').read_text())
+        receipt = json.loads((tp.root / 'deliveries' / f'{inv}.json').read_text(encoding="utf-8"))
         assert receipt['state'] == 'sending'
         return subprocess.CompletedProcess(args, 0, b'{"status":"working"}')
     monkeypatch.setattr(handoff.subprocess, 'run', run)
@@ -116,7 +116,7 @@ def test_terminal_or_already_dispatched_never_sends(tmp_path, monkeypatch, state
 def test_existing_response_requires_collection(tmp_path, suffix):
     tp, inv, opts = setup(tmp_path)
     handoff.prepare(tp, inv, **opts)
-    (tp.scratch / f'{inv}.json{suffix}').write_text('{}')
+    (tp.scratch / f'{inv}.json{suffix}').write_text('{}', encoding='utf-8')
     assert handoff.deliver(tp, inv)['reason'] == 'response-present'
 
 
@@ -140,7 +140,7 @@ def test_dirty_or_committed_tamper_blocks_delivery(tmp_path):
     tp, inv, opts = setup(tmp_path)
     result = handoff.prepare(tp, inv, **opts)
     request = Path(result['packet'])
-    request.write_text('tampered')
+    request.write_text('tampered', encoding='utf-8')
     with pytest.raises(ledger.LedgerDirtyError):
         handoff.deliver(tp, inv)
     ledger.commit(ledger.require_root(tp.root), [request], 'simulated committed edit')
@@ -196,7 +196,7 @@ def test_desktop_claude_aliases(tmp_path, participant):
 
 def test_capture_can_freeze_after_fast_response_but_cannot_send(tmp_path):
     tp, inv, opts = setup(tmp_path)
-    (tp.scratch / f'{inv}.json').write_text('{}')
+    (tp.scratch / f'{inv}.json').write_text('{}', encoding='utf-8')
     handoff.capture_request(tp, inv, packet.build(tp, 'codex', inv))
     assert handoff.prepare(tp, inv, **opts)['reason'] == 'response-present'
 
@@ -213,7 +213,7 @@ def test_preflight_failure_preserves_prepared_and_never_sends(tmp_path, monkeypa
         calls.append(args)
         assert args == [handoff.sys.executable, opts['script'], '--help']
         assert kwargs['shell'] is False
-        assert json.loads((tp.root / 'deliveries' / f'{inv}.json').read_text())['state'] == 'prepared'
+        assert json.loads((tp.root / 'deliveries' / f'{inv}.json').read_text(encoding="utf-8"))['state'] == 'prepared'
         if failure == 'timeout':
             raise subprocess.TimeoutExpired(args, 1, stderr=b'private error')
         if failure == 'oserror':

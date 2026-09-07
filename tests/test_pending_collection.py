@@ -31,20 +31,20 @@ def test_restart_discovers_existing_reply_and_never_claims_resume(tmp_path):
     tp, inv = setup_topic(tmp_path)
     write_reply(tp, inv)
     assert scan(tmp_path) == 0
-    receipt = json.loads(tp.last_result.read_text())
+    receipt = json.loads(tp.last_result.read_text(encoding="utf-8"))
     assert receipt['merged'] == [inv]
     assert receipt['follow_up']['resume_executed'] is False
     original = tp.minutes.read_bytes()
     # 別呼出しはdiskから読み直す。mtimeや前回のメモリには依存しない。
     assert scan(tmp_path) == 0
     assert tp.minutes.read_bytes() == original
-    assert json.loads(tp.last_result.read_text())['follow_up']['invocations'] == [inv]
+    assert json.loads(tp.last_result.read_text(encoding="utf-8"))['follow_up']['invocations'] == [inv]
 
 
 def test_pending_is_not_success_and_late_reply_is_discovered(tmp_path):
     tp, inv = setup_topic(tmp_path)
     assert scan(tmp_path) == 2
-    assert json.loads(tp.last_result.read_text())['pending'] == [inv]
+    assert json.loads(tp.last_result.read_text(encoding="utf-8"))['pending'] == [inv]
     write_reply(tp, inv)
     assert scan(tmp_path) == 0
     assert Journal.load(tp).is_merged(inv)
@@ -56,7 +56,7 @@ def test_one_bad_reply_does_not_hide_other_ready_reply(tmp_path):
     write_reply(tp, inv, invocation_id='wrong')
     write_reply(tp, other)
     assert scan(tmp_path) == 1
-    receipt = json.loads(tp.last_result.read_text())
+    receipt = json.loads(tp.last_result.read_text(encoding="utf-8"))
     assert receipt['failed'][0]['invocation'] == inv
     assert other in receipt['merged']
 
@@ -66,7 +66,7 @@ def test_cancelled_late_reply_is_not_collected(tmp_path):
     assert main(['cancel', 't1', '--invocation', inv, '--root', str(tmp_path)]) == 0
     write_reply(tp, inv)
     assert scan(tmp_path) == 0
-    receipt = json.loads(tp.last_result.read_text())
+    receipt = json.loads(tp.last_result.read_text(encoding="utf-8"))
     assert receipt['cancelled'] == [inv]
     assert receipt['merged'] == []
 
@@ -92,7 +92,7 @@ def test_unhashable_evidence_type_returns_schema_error(tmp_path):
     tp, inv = setup_topic(tmp_path)
     write_reply(tp, inv, claims=[{'claim': 'A', 'evidence_type': [], 'evidence': 'B'}])
     assert scan(tmp_path) == 1
-    assert json.loads(tp.last_result.read_text())['failed'][0]['detail'].startswith('schema')
+    assert json.loads(tp.last_result.read_text(encoding="utf-8"))['failed'][0]['detail'].startswith('schema')
 
 
 @pytest.mark.parametrize('state', ['output-received', 'validated'])
