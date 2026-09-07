@@ -62,7 +62,8 @@ python3 -m pytest -q tests/test_pending_collection.py tests/test_watcher.py test
 invocation単位の回収・取消はOS標準の排他ロックを使用します。生存中の所有者から
 mtime経過だけでロックを奪いません。ファイルはunlinkせず、プロセス終了時にOSが解放します。
 POSIXは`flock`、Windowsは`msvcrt.locking`です。今回の実プロセス試験はmacOS上で行っています。
-Windows実機での今回の変更確認とCIは未実施です。Windows動作を前提に自動運用を昇格しません。
+Windowsの検証はCIでも実行します。最新結果は[検証記録](collection-recovery-verification.md)から確認してください。
+利用者のWindows実機での動作確認は別であり、自動運用へ反映済みとは扱いません。
 
 同じtopicで旧版と新版のcollectorを同時実行しないでください。切替前に旧collectorの終了を
 確認してください。旧版にはmtimeでlockファイルを削除する経路があり、新版と排他方式が異なります。
