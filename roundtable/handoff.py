@@ -78,7 +78,10 @@ def _script(value):
     path = Path(value) if value else Path()
     if not path.is_absolute() or path.name != "cmux_file_signal.py" or not path.is_file():
         raise ValueError("script must be an existing absolute cmux_file_signal.py path")
-    return str(path.resolve())
+    resolved = path.resolve()
+    if resolved.name != "cmux_file_signal.py":
+        raise ValueError("resolved script must be named cmux_file_signal.py")
+    return str(resolved)
 
 
 def _capture_request(tp, inv_id, text):
@@ -91,8 +94,13 @@ def _capture_request(tp, inv_id, text):
         raise ValueError("incomplete request capture; inspect ledger before retry")
     with minutes._lock(tp):
         raw = minutes._read_verified(tp).encode("utf-8")
-    text = text.replace(str((tp.snapshot / "minutes.snapshot.md").resolve()),
-                        str(snapshot.resolve()), 1)
+    participant = Journal.load(tp).data["invocations"][inv_id]["participant"]
+    # 自由記述のrole_hintを探索せず、生成テンプレートの固定末尾だけを差し替える。
+    body = packet.build(tp, participant, inv_id).split("\n", 2)[2]
+    frozen_body = packet.build(tp, participant, inv_id, snapshot_path=snapshot).split("\n", 2)[2]
+    if not text.endswith(body):
+        raise ValueError("packet instruction block does not match generated template")
+    text = text[:-len(body)] + frozen_body
     ledger.write_state(snapshot, raw.decode("utf-8"), f"handoff: {inv_id} snapshot")
     ledger.write_state(request, text, f"handoff: {inv_id} request")
     return text
@@ -223,6 +231,15 @@ def deliver(tp: TopicPaths, inv_id: str, timeout_s=30) -> dict:
                     "--workspace", record["workspace"], "--surface", record["surface"],
                     "--path-only", "--no-control-block", "--mode", "pointer", "--transport", "file",
                     "--require-process", record["require_process"], "--verify-submit", "--verify-submit-json"]
+        else:
+            try:
+                command, _, _ = packet.clipboard_command()
+            except NotImplementedError as exc:
+                return _result(record, ok=False, reason="clipboard-preflight-failed",
+                               preflight_error=type(exc).__name__)
+            if shutil.which(command) is None:
+                return _result(record, ok=False, reason="clipboard-preflight-failed",
+                               preflight_error="clipboard-command-not-on-path")
         record["state"] = "sending"
         _save(receipt, record)  # Durable before any possible clipboard/send side effect.
         try:

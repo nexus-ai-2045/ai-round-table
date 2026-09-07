@@ -244,7 +244,7 @@ def _collect_one(
     inv,
     participant,
     timeout_s,
-    delivered: bool,
+    delivered: bool | None,
     preserve_delivery_unknown: bool = False,
     failure_context: dict | None = None,
     lock_timeout_s: float | None = None,
@@ -306,10 +306,23 @@ def _collect_one(
             print(f"[tmp 残存] scratch に未確定の .tmp がある: {', '.join(leftovers)}")
             print("  席が書きかけ / rename 前に停止した可能性。『未貼り付け』とは限らない。")
         elif delivered:
-            print("packet は搬出済み (delivered)。席に貼り付けたか確認してください (未貼り付け?)。")
+            print("packet は搬出済み (delivered)。席の受信・回答状況を確認し、同じ依頼を再送しないでください。")
+        elif delivered is None:
+            print("搬出履歴を確定できません。席の受信状況を確認し、同じ依頼を再送しないでください。")
         else:
             print("クリップボード搬出なし (--no-clipboard)。packet が席に届いていない可能性。")
     return 1
+
+
+def _delivery_status(rec) -> bool | None:
+    """選択経路と、実際に搬出成功を記録した履歴を区別する。"""
+    if rec.get("delivery_confirmed") or rec["state"] in {
+        "delivered", "output-received", "validated", "merged"
+    }:
+        return True
+    if rec.get("delivery_route") == "stdout-only":
+        return False
+    return None
 
 
 def _cmd_collect(args) -> int:
@@ -321,7 +334,7 @@ def _cmd_collect(args) -> int:
         print(f"unknown invocation: {inv}", file=sys.stderr)
         return 2
     rec = journal.data["invocations"][inv]
-    delivered = rec["state"] in {"delivered", "output-received", "validated", "merged"}
+    delivered = _delivery_status(rec)
     return _collect_one(tp, journal, inv, rec["participant"], args.timeout, delivered)
 
 
@@ -439,7 +452,7 @@ def _cmd_collect_pending(args) -> int:
                 continue
             try:
                 rc = _collect_one(tp, Journal.load(tp), inv, rec["participant"],
-                                  0, delivered=rec["state"] != "prepared", lock_timeout_s=0)
+                                  0, delivered=_delivery_status(rec), lock_timeout_s=0)
             except LockTimeout:
                 # 搬出中・他collector使用中の席は、ほかの回答を妨げず次回に回す。
                 continue

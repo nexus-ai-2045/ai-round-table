@@ -1,7 +1,7 @@
 """Macの依頼準備から回答回収まで、外部AIを起動せずCLIで確認する。"""
 import json
 
-from roundtable import packet
+from roundtable import handoff, packet
 from roundtable.cli import main
 from roundtable.paths import ensure_topic
 
@@ -17,6 +17,10 @@ def setup(root):
 
 
 def test_desktop_prepare_apply_collect(tmp_path, monkeypatch):
+    monkeypatch.setattr(packet.platform, 'system', lambda: 'Darwin')
+    original = handoff.shutil.which
+    monkeypatch.setattr(handoff.shutil, 'which',
+                        lambda name: '/mock/pbcopy' if name == 'pbcopy' else original(name))
     sent = []
     monkeypatch.setattr(packet, 'to_clipboard', lambda text, **kwargs: sent.append(text))
     tp, inv = setup(tmp_path)

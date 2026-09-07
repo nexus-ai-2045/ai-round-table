@@ -7,7 +7,6 @@ import uuid
 
 import pytest
 
-import conftest
 from conftest import CHECKOUT, validate_basetemp, basetemp_diagnostic
 
 
@@ -53,23 +52,18 @@ def test_actual_pytest_stops_before_creating_basetemp():
     assert head() == before
 
 
-def test_missing_suffix_resolves_existing_parent_only(tmp_path, monkeypatch):
-    target = tmp_path / "missing" / "nested"
-    original = Path.resolve
-    def resolve(path, *args, **kwargs):
-        if path == target or path == target.parent:
-            raise AssertionError("missing path must not be resolved")
-        return original(path, *args, **kwargs)
-    monkeypatch.setattr(Path, "resolve", resolve)
-    assert conftest._existing_parent_resolve(target) == tmp_path.resolve() / "missing" / "nested"
 
-
-def test_alias_disagreement_fails_closed(monkeypatch):
-    external = Path(tempfile.gettempdir()).resolve() / "roundtable-alias-fixture"
-    target = CHECKOUT / "unignored-alias"
-    monkeypatch.setattr(conftest, "_existing_parent_resolve", lambda path: external / path.name)
-    with pytest.raises(pytest.UsageError, match="包含判定不一致") as caught:
-        validate_basetemp(str(target))
-    assert "containment_raw=True" in str(caught.value)
-    assert "containment_resolved=False" in str(caught.value)
-    assert "git check-ignore -v" in str(caught.value)
+@pytest.mark.parametrize("safe", [True, False])
+def test_crlf_gitignore_checks_child_file(tmp_path, safe):
+    repo = tmp_path / "crlf-repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True, capture_output=True)
+    (repo / ".gitignore").write_bytes(b".pytest-tmp*/\r\n__pycache__/\r\n.pytest_cache/\r\n.locks/\r\n\r\n")
+    target = repo / (".pytest-tmp-safe" if safe else "unignored-test-artifacts")
+    if safe:
+        validate_basetemp(str(target), checkout=repo)
+    else:
+        with pytest.raises(pytest.UsageError, match="gitignore") as caught:
+            validate_basetemp(str(target), checkout=repo)
+        assert "__roundtable_basetemp_probe__" in str(caught.value)
+    assert not target.exists()

@@ -7,6 +7,7 @@ dispatcher は AI を実行しない。参加者への依頼文 (packet) を作�
 import math
 import platform
 import subprocess
+from pathlib import Path
 
 from .paths import TopicPaths
 
@@ -22,13 +23,24 @@ _TEMPLATE = """[roundtable packet / invocation: {inv}]
 3. 議事録本体や他のファイルは変更しないこと。"""
 
 
-def build(tp: TopicPaths, participant: str, inv_id: str, role_hint: str = "") -> str:
+def build(tp: TopicPaths, participant: str, inv_id: str, role_hint: str = "",
+          *, snapshot_path: Path | None = None) -> str:
     """参加者に渡す packet 文字列を組み立てる (副作用なし)。"""
     out = (tp.scratch / f"{inv_id}.json").resolve()
-    snap = (tp.snapshot / "minutes.snapshot.md").resolve()
+    snap = (snapshot_path if snapshot_path is not None else tp.snapshot / "minutes.snapshot.md").resolve()
     return _TEMPLATE.format(
         inv=inv_id, participant=participant, role_hint=role_hint, snapshot=snap, out=out
     )
+
+
+def clipboard_command() -> tuple[str, str, str]:
+    """搬出と事前確認で共有するOS別のコマンド・文字コード・接頭文字。"""
+    system = platform.system()
+    if system == "Darwin":
+        return "pbcopy", "utf-8", ""
+    if system == "Windows":
+        return "clip.exe", "utf-16-le", chr(0xFEFF)
+    raise NotImplementedError(f"Clipboard export is not supported on {system}")
 
 
 def to_clipboard(text: str, timeout_s: float | None = None) -> None:
@@ -40,15 +52,8 @@ def to_clipboard(text: str, timeout_s: float | None = None) -> None:
     """
     if timeout_s is not None and (not math.isfinite(timeout_s) or timeout_s <= 0):
         raise ValueError("timeout must be positive and finite")
-    system = platform.system()
-    if system == "Darwin":
-        command = "pbcopy"
-        data = text.encode("utf-8")
-    elif system == "Windows":
-        command = "clip.exe"
-        data = (chr(0xFEFF) + text).encode("utf-16-le")
-    else:
-        raise NotImplementedError(f"Clipboard export is not supported on {system}")
+    command, encoding, prefix = clipboard_command()
+    data = (prefix + text).encode(encoding)
 
     subprocess.run(
         [command],

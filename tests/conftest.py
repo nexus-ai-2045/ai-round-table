@@ -9,31 +9,25 @@ import pytest
 CHECKOUT = Path(__file__).resolve().parents[1]
 
 
-def _existing_parent_resolve(path: Path) -> Path:
-    """未作成suffixを保ち、Windowsの既存親だけで実パスを解決する。"""
-    suffix: list[str] = []
-    parent = path
-    while not parent.exists():
-        if parent == parent.parent:
-            raise OSError("existing ancestor unavailable")
-        suffix.append(parent.name)
-        parent = parent.parent
-    return parent.resolve(strict=True).joinpath(*reversed(suffix))
+def _ignore_probe(target: Path, checkout: Path) -> str:
+    """末尾slashではなく、生成予定の子ファイルが無視されることを検査する。"""
+    return (target.relative_to(checkout) / "__roundtable_basetemp_probe__").as_posix()
 
 
 def basetemp_diagnostic(value: str, checkout: Path = CHECKOUT) -> str:
     """失敗したCIで包含判定とignore規則を特定するための診断。"""
     raw = Path(os.path.abspath(value))
-    resolved = _existing_parent_resolve(raw)
+    resolved = raw.resolve()
     root = checkout.resolve()
+    probe_path = _ignore_probe(resolved, root)
     probe = subprocess.run(
-        ["git", "check-ignore", "-v", "--", str(raw) + "/"],
+        ["git", "check-ignore", "-v", "--", probe_path],
         cwd=root, capture_output=True, timeout=10,
     )
     return (f"raw={raw!s}; resolved={resolved!s}; checkout={root!s}; "
             f"containment_raw={raw.is_relative_to(root)}; "
             f"containment_resolved={resolved.is_relative_to(root)}; "
-            f"git check-ignore -v rc={probe.returncode}; "
+            f"probe={probe_path}; git check-ignore -v rc={probe.returncode}; "
             f"stdout={probe.stdout!r}; stderr={probe.stderr!r}")
 
 
@@ -42,25 +36,15 @@ def validate_basetemp(value: str | None, checkout: Path = CHECKOUT) -> None:
     if value is None:
         return
     raw = Path(os.path.abspath(value))
-    lexical_checkout = Path(os.path.abspath(checkout))
-    try:
-        target = _existing_parent_resolve(raw)
-        checkout = checkout.resolve(strict=True)
-    except OSError as exc:
-        raise pytest.UsageError(f"basetemp解決失敗: raw={raw}; checkout={checkout}") from exc
-    lexical_inside = (raw.is_relative_to(lexical_checkout)
-                      or raw.is_relative_to(checkout))
-    resolved_inside = target.is_relative_to(checkout)
-    if lexical_inside and not resolved_inside:
-        raise pytest.UsageError("basetempの包含判定不一致: " + basetemp_diagnostic(value, checkout))
-    if not resolved_inside:
+    target = raw.resolve()
+    checkout = checkout.resolve()
+    if not target.is_relative_to(checkout):
         return
-    relative = target.relative_to(checkout)
     if target == checkout:
         raise pytest.UsageError("basetempにcheckout自体は指定できません")
     try:
         result = subprocess.run(
-            ["git", "check-ignore", "-q", "--", relative.as_posix() + "/"],
+            ["git", "check-ignore", "-q", "--", _ignore_probe(target, checkout)],
             cwd=checkout, capture_output=True, timeout=10,
         )
     except (OSError, subprocess.SubprocessError) as exc:

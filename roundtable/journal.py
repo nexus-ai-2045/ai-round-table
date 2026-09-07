@@ -226,6 +226,8 @@ class Journal:
         current = rec["state"]
         if not self._transition_allowed(current, state):
             raise ValueError(f"invalid transition: {current} -> {state}")
+        if current == "delivered" or state == "delivered":
+            rec["delivery_confirmed"] = True
         rec["state"] = state
         rec["detail"] = detail
         self.save()

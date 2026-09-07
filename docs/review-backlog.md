@@ -656,3 +656,16 @@ Independent 17.2 / Decentralized 7.8 / Centralized 4.4 という**数値の一�
 配布版CIのWindows実行で日本語helpのUnicodeEncodeErrorを検出した。プロセスのCLI入口だけで
 stdout/stderrをUTF-8へ設定し、console scriptと`python -m`の両入口を統一した。
 ライブラリとして呼ぶ`main(argv)`は変更せず、cp1252環境を再現する2回帰と独立レビューが通った。
+
+## PR #22の再レビュー対応（2026-09-08）
+
+| 指摘 | 根本修正と回帰確認 |
+|---|---|
+| role_hint内のパスが固定snapshotより先に置換される | packet生成のsnapshot引数を設け、固定指示本文を照合して再構成。自由記述は保持 |
+| clipboard未対応OS・コマンド欠落が送達不明になる | 既存搬出と同じOS別コマンド選択を事前確認に使用。未送信はprepared、開始後の失敗はunknownを維持 |
+| waitingへの遷移で搬出成功履歴が消える | Journalのdelivered遷移で確定履歴を保存し、CLIの回収経路で共通参照。送達不明は成功扱いせず再送禁止を案内 |
+| symlinkのprepareとdeliverで名前検査が変わる | prepare時に解決後の実体名も検査し、後段で実行できない依頼を早期拒否 |
+
+Windowsのテスト隔離ガードは、末尾slashの照合がgitignoreの空行に一致扱いとなる経路をCI診断で特定した。
+生成予定の子ファイルでignoreを検査する方式へ修復し、CRLFの独立git repoでも許可・拒否を確認した。
+パス別名という仮説の追加コードは実測に合わないため除去した。ガードを本試験より先にCIで検査する。

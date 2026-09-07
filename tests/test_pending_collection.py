@@ -122,3 +122,44 @@ def test_mistyped_root_is_not_reported_settled_or_created(tmp_path, capsys):
     assert scan(tmp_path) == 2
     assert 'unknown-topic' in capsys.readouterr().out
     assert not (tmp_path / 'minutes').exists()
+
+
+@pytest.mark.parametrize("route", ["relay", "stdout-only", None])
+def test_repeated_collect_preserves_delivery_guidance(tmp_path, capsys, route):
+    tp, inv = setup_topic(tmp_path)
+    journal = Journal.load(tp)
+    if route is not None:
+        journal.data["invocations"][inv]["delivery_route"] = route
+        journal.save()
+    if route == "relay":
+        journal.set_state(inv, "delivered", "tier1:sent")
+    for _ in range(2):
+        assert main(["collect", "t1", "--root", str(tmp_path),
+                     "--invocation", inv, "--timeout", "0"]) == 1
+        output = capsys.readouterr().out
+        assert Journal.load(tp).data["invocations"][inv]["state"] == "waiting"
+        if route == "relay":
+            assert "搬出済み" in output
+            assert "クリップボード搬出なし" not in output
+            assert "再送しない" in output
+        elif route == "stdout-only":
+            assert "クリップボード搬出なし" in output
+    if route is None:
+        assert "搬出履歴を確定できません" in output
+        assert "再送しない" in output
+
+
+def test_unknown_delivery_never_becomes_confirmed_on_collect_retry(tmp_path, capsys):
+    tp, inv = setup_topic(tmp_path)
+    journal = Journal.load(tp)
+    journal.data["invocations"][inv]["delivery_route"] = "relay"
+    journal.save()
+    journal.set_state(inv, "delivery-unknown", "transport-timeout")
+    for _ in range(2):
+        assert main(["collect", "t1", "--root", str(tmp_path),
+                     "--invocation", inv, "--timeout", "0"]) == 1
+        output = capsys.readouterr().out
+        assert "搬出履歴を確定できません" in output
+        assert "再送しない" in output
+        assert "搬出済み" not in output
+        assert not Journal.load(tp).data["invocations"][inv].get("delivery_confirmed")

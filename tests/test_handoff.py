@@ -17,8 +17,9 @@ SURFACE = '22222222-2222-4222-8222-222222222222'
 @pytest.fixture(autouse=True)
 def cmux_on_path(monkeypatch):
     original = handoff.shutil.which
+    monkeypatch.setattr(packet.platform, 'system', lambda: 'Darwin')
     monkeypatch.setattr(handoff.shutil, 'which',
-                        lambda name: '/mock/cmux' if name == 'cmux' else original(name))
+                        lambda name: '/mock/' + name if name in {'cmux', 'pbcopy'} else original(name))
 
 
 def setup(tmp_path, participant='codex'):
@@ -225,6 +226,87 @@ def test_preflight_failure_preserves_prepared_and_never_sends(tmp_path, monkeypa
     result = handoff.deliver(tp, inv)
     assert not result['ok'] and result['reason'] == 'cmux-preflight-failed'
     assert result['state'] == 'prepared'
-    assert 'private' not in json.dumps(result)
+    assert 'private error' not in json.dumps(result)
+    assert 'private dependency error' not in json.dumps(result)
     assert handoff.status(tp, inv)['state'] == 'prepared'
     assert len(calls) == (0 if failure == 'missing-cmux' else 1)
+
+
+def test_role_hint_snapshot_path_does_not_steal_frozen_reference(tmp_path):
+    tp, inv, _ = setup(tmp_path)
+    original = str((tp.snapshot / 'minutes.snapshot.md').resolve())
+    role = f'参考パス: {original}\n自由記述にも同じパス: {original}'
+    captured = handoff.capture_request(tp, inv, packet.build(tp, 'codex', inv, role))
+    frozen = tp.root / 'requests' / f'{inv}.snapshot.md'
+    assert role in captured
+    assert captured == packet.build(tp, 'codex', inv, role, snapshot_path=frozen)
+    assert captured.count(original) == 2
+
+
+def test_capture_rejects_changed_instruction_block_before_artifact_write(tmp_path):
+    tp, inv, _ = setup(tmp_path)
+    text = packet.build(tp, 'codex', inv) + '\n変更された末尾'
+    with pytest.raises(ValueError, match='instruction block'):
+        handoff.capture_request(tp, inv, text)
+    assert not (tp.root / 'requests' / f'{inv}.md').exists()
+    assert not (tp.root / 'requests' / f'{inv}.snapshot.md').exists()
+
+
+@pytest.mark.parametrize('system,command', [('Linux', None), ('Darwin', 'pbcopy'), ('Windows', 'clip.exe')])
+def test_clipboard_preflight_failure_keeps_prepared_and_can_retry(tmp_path, monkeypatch, system, command):
+    tp, inv, _ = setup(tmp_path, 'claude')
+    handoff.prepare(tp, inv, transport='claude-desktop')
+    monkeypatch.setattr(packet.platform, 'system', lambda: system)
+    monkeypatch.setattr(handoff.shutil, 'which', lambda name: None)
+    copied = Mock()
+    monkeypatch.setattr(packet, 'to_clipboard', copied)
+    result = handoff.deliver(tp, inv)
+    assert result['reason'] == 'clipboard-preflight-failed'
+    assert result['state'] == 'prepared'
+    assert handoff.status(tp, inv)['state'] == 'prepared'
+    copied.assert_not_called()
+    monkeypatch.setattr(packet.platform, 'system', lambda: 'Darwin')
+    monkeypatch.setattr(handoff.shutil, 'which', lambda name: '/mock/pbcopy')
+    assert handoff.deliver(tp, inv)['state'] == 'clipboard-ready'
+    copied.assert_called_once()
+
+
+def test_clipboard_failure_after_preflight_remains_unknown(tmp_path, monkeypatch):
+    tp, inv, _ = setup(tmp_path, 'claude')
+    handoff.prepare(tp, inv, transport='claude-desktop')
+    monkeypatch.setattr(packet.platform, 'system', lambda: 'Darwin')
+    monkeypatch.setattr(handoff.shutil, 'which', lambda name: '/mock/pbcopy')
+    copied = Mock(side_effect=subprocess.TimeoutExpired('pbcopy', 1))
+    monkeypatch.setattr(packet, 'to_clipboard', copied)
+    assert handoff.deliver(tp, inv)['state'] == 'delivery-unknown'
+    assert handoff.deliver(tp, inv)['reason'] == 'resend-forbidden'
+    copied.assert_called_once()
+
+
+def test_script_alias_with_different_target_name_rejected_at_prepare(tmp_path):
+    tp, inv, opts = setup(tmp_path)
+    target = tmp_path / 'other.py'
+    target.write_text('# 対象名違い', encoding='utf-8')
+    alias = tmp_path / 'alias' / 'cmux_file_signal.py'
+    alias.parent.mkdir()
+    alias.symlink_to(target)
+    with pytest.raises(ValueError, match='resolved script'):
+        handoff.prepare(tp, inv, **{**opts, 'script': str(alias)})
+    assert not (tp.root / 'deliveries' / f'{inv}.json').exists()
+
+
+def test_script_alias_with_matching_target_name_is_stable(tmp_path, monkeypatch):
+    tp, inv, opts = setup(tmp_path)
+    alias = tmp_path / 'alias' / 'cmux_file_signal.py'
+    alias.parent.mkdir()
+    alias.symlink_to(opts['script'])
+    prepared = handoff.prepare(tp, inv, **{**opts, 'script': str(alias)})
+    assert prepared['script'] == str(Path(opts['script']).resolve())
+    monkeypatch.setattr(handoff, '_cmux_preflight', lambda *args: None)
+    original = subprocess.run
+    def run(args, **kwargs):
+        if '--message-file' in args:
+            return subprocess.CompletedProcess(args, 0, b'')
+        return original(args, **kwargs)
+    monkeypatch.setattr(handoff.subprocess, 'run', run)
+    assert handoff.deliver(tp, inv)['state'] == 'submitted'
