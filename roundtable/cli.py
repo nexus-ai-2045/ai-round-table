@@ -7,14 +7,16 @@ scratch の出力を待つだけ。貼り付け先の chat 操作は人間 (CEO)
 """
 import argparse
 import json
+import math
 import sys
+import time
 from pathlib import Path
 
 from . import minutes, packet, watcher
 from .filelock import LockTimeout
 from .journal import Journal
 from .ledger import LedgerDirtyError
-from .paths import ensure_topic
+from .paths import ensure_topic, topic_dir
 from .relay import DeliveryUnknownError, get_relay, load_seats, save_seats
 from .review_workflow import load_manifest, validate_live_git, validate_review_workflow
 
@@ -98,9 +100,16 @@ def _cmd_dispatch(args) -> int:
     minutes.make_snapshot(tp)
     journal = Journal.load(tp)
     inv = journal.new_invocation(args.participant, journal.round_no)
+    journal.data["invocations"][inv]["delivery_route"] = (
+        "stdout-only" if args.no_clipboard and args.tier == 3 else "relay"
+    )
+    journal.save()
     journal.record_human_action("dispatch", f"{args.participant}:{inv}")
 
     text = packet.build(tp, args.participant, inv, role_hint=args.role_hint)
+    from .handoff import capture_request
+
+    text = capture_request(tp, inv, text)
     print(text)
 
     tier = args.tier
@@ -112,83 +121,92 @@ def _cmd_dispatch(args) -> int:
             delivered = False
             relay_label = "stdout-only"
         else:
-            seats = load_seats(tp)
-            seat_key = f"rt/{args.slug}/{args.participant}"
-            seat = seats.get(seat_key, {
-                "participant": args.participant,
-                "topic": args.slug,
-                "surface": args.participant,
-                "tier": tier,
-            })
-            seat["topic"] = args.slug
-            seat["thread_name"] = f"rt-{args.slug}-{args.participant}"
-            # cwd は議題ディレクトリに限定する: Tier1 の sandbox 書込範囲がここになる。
-            relay = get_relay(
-                args.participant, tier=tier, allow_fallback=True, cwd=str(tp.root.resolve())  # 相対 --root だと spawn 先で二重解決になる (P2)
-            )
-            try:
-                relay_label = relay.send(seat, text)
-            except DeliveryUnknownError as exc:
-                # thread/start 済みなら、その参照を失うと再実行時に別席へ二重送信する。
-                seat["tier"] = relay.tier
-                seats[seat_key] = seat
-                save_seats(tp, seats)
-                journal.set_state(inv, "delivery-unknown", f"delivery-unknown: {exc}")
-                _write_last_result(
-                    tp,
-                    {
-                        "ok": False,
-                        "reason": "delivery-unknown",
+            delivery_unknown_context = None
+            with watcher._invocation_lock(tp, inv):
+                journal = Journal.load(tp)
+                state = journal.data["invocations"][inv]["state"]
+                if state != "prepared":
+                    payload = {"ok": False, "reason": state,
+                               "invocation": inv, "exit_code": 1}
+                    _write_last_result(tp, payload)
+                    print(json.dumps(payload, ensure_ascii=False))
+                    return 1
+                seats = load_seats(tp)
+                seat_key = f"rt/{args.slug}/{args.participant}"
+                seat = seats.get(seat_key, {
+                    "participant": args.participant,
+                    "topic": args.slug,
+                    "surface": args.participant,
+                    "tier": tier,
+                })
+                seat["topic"] = args.slug
+                seat["thread_name"] = f"rt-{args.slug}-{args.participant}"
+                # cwd は議題ディレクトリに限定する: Tier1 の sandbox 書込範囲がここになる。
+                relay = get_relay(
+                    args.participant, tier=tier, allow_fallback=True, cwd=str(tp.root.resolve())  # 相対 --root だと spawn 先で二重解決になる (P2)
+                )
+                try:
+                    relay_label = relay.send(seat, text)
+                except DeliveryUnknownError as exc:
+                    # thread/start 済みなら、その参照を失うと再実行時に別席へ二重送信する。
+                    seat["tier"] = relay.tier
+                    seats[seat_key] = seat
+                    save_seats(tp, seats)
+                    journal.set_state(inv, "delivery-unknown", f"delivery-unknown: {exc}")
+                    _write_last_result(
+                        tp,
+                        {
+                            "ok": False,
+                            "reason": "delivery-unknown",
+                            "detail": str(exc),
+                            "thread_ref": seat.get("thread_ref"),
+                            "invocation": inv,
+                            "exit_code": 1,
+                        },
+                    )
+                    print(
+                        f"\n[delivery-unknown] invocation: {inv} / {exc}\n"
+                        "[wait] 席が受理済みの可能性があるため、自動再送せず成果物を待ちます。"
+                    )
+                    close_after_delivery_unknown = True
+                    delivery_unknown_context = {
                         "detail": str(exc),
                         "thread_ref": seat.get("thread_ref"),
-                        "invocation": inv,
-                        "exit_code": 1,
-                    },
-                )
-                print(
-                    f"\n[delivery-unknown] invocation: {inv} / {exc}\n"
-                    "[wait] 席が受理済みの可能性があるため、自動再送せず成果物を待ちます。"
-                )
-                close_after_delivery_unknown = True
+                    }
+                except Exception as exc:  # Tier3 失敗など
+                    journal.set_state(inv, "failed", f"relay: {exc}")
+                    _write_last_result(
+                        tp,
+                        {
+                            "ok": False,
+                            "reason": "relay",
+                            "detail": str(exc),
+                            "invocation": inv,
+                            "exit_code": 1,
+                        },
+                    )
+                    print(f"\n[failed] invocation: {inv} / reason: relay / {exc}")
+                    return 1
+                else:
+                    seat["tier"] = relay.tier
+                    seats[seat_key] = seat
+                    save_seats(tp, seats)
+                    journal.set_state(inv, "delivered", f"tier{relay.tier}:{relay_label}")
+                    delivered = True
+                    if relay.tier == 3:
+                        print("\n[clipboard] packet をクリップボードに載せた。席のチャットに貼り付けてください。")
+                        journal.record_human_action("tier3_paste_required", inv)
+                    else:
+                        print(f"\n[tier1] packet を席へ送った (tier={relay.tier}, label={relay_label})。")
+                    if "fallback" in str(relay_label):
+                        print(f"[fallback] Tier1 失敗のため Tier3 に縮退: {relay_label}")
+            if delivery_unknown_context is not None:
+                # collect は同じ lock を取得するため、送信状態を確定してから解放する。
                 return _collect_one(
-                    tp,
-                    journal,
-                    inv,
-                    args.participant,
-                    args.timeout,
-                    delivered=True,
-                    preserve_delivery_unknown=True,
-                    failure_context={
-                        "detail": str(exc),
-                        "thread_ref": seat.get("thread_ref"),
-                    },
+                    tp, journal, inv, args.participant, args.timeout,
+                    delivered=True, preserve_delivery_unknown=True,
+                    failure_context=delivery_unknown_context,
                 )
-            except Exception as exc:  # Tier3 失敗など
-                journal.set_state(inv, "failed", f"relay: {exc}")
-                _write_last_result(
-                    tp,
-                    {
-                        "ok": False,
-                        "reason": "relay",
-                        "detail": str(exc),
-                        "invocation": inv,
-                        "exit_code": 1,
-                    },
-                )
-                print(f"\n[failed] invocation: {inv} / reason: relay / {exc}")
-                return 1
-            seat["tier"] = relay.tier
-            seats[seat_key] = seat
-            save_seats(tp, seats)
-            journal.set_state(inv, "delivered", f"tier{relay.tier}:{relay_label}")
-            delivered = True
-            if relay.tier == 3:
-                print("\n[clipboard] packet をクリップボードに載せた。席のチャットに貼り付けてください。")
-                journal.record_human_action("tier3_paste_required", inv)
-            else:
-                print(f"\n[tier1] packet を席へ送った (tier={relay.tier}, label={relay_label})。")
-            if "fallback" in str(relay_label):
-                print(f"[fallback] Tier1 失敗のため Tier3 に縮退: {relay_label}")
 
         if args.async_dispatch:
             _write_last_result(
@@ -226,10 +244,12 @@ def _collect_one(
     inv,
     participant,
     timeout_s,
-    delivered: bool,
+    delivered: bool | None,
     preserve_delivery_unknown: bool = False,
     failure_context: dict | None = None,
+    lock_timeout_s: float | None = None,
 ) -> int:
+    lock_options = {} if lock_timeout_s is None else {"lock_timeout_s": lock_timeout_s}
     result = watcher.collect(
         tp,
         journal,
@@ -237,6 +257,7 @@ def _collect_one(
         participant,
         timeout_s=timeout_s,
         preserve_delivery_unknown=preserve_delivery_unknown,
+        **lock_options,
     )
     if result["ok"]:
         journal.advance_round_if_complete(minutes.parse_participants(tp))
@@ -285,10 +306,23 @@ def _collect_one(
             print(f"[tmp 残存] scratch に未確定の .tmp がある: {', '.join(leftovers)}")
             print("  席が書きかけ / rename 前に停止した可能性。『未貼り付け』とは限らない。")
         elif delivered:
-            print("packet は搬出済み (delivered)。席に貼り付けたか確認してください (未貼り付け?)。")
+            print("packet は搬出済み (delivered)。席の受信・回答状況を確認し、同じ依頼を再送しないでください。")
+        elif delivered is None:
+            print("搬出履歴を確定できません。席の受信状況を確認し、同じ依頼を再送しないでください。")
         else:
             print("クリップボード搬出なし (--no-clipboard)。packet が席に届いていない可能性。")
     return 1
+
+
+def _delivery_status(rec) -> bool | None:
+    """選択経路と、実際に搬出成功を記録した履歴を区別する。"""
+    if rec.get("delivery_confirmed") or rec["state"] in {
+        "delivered", "output-received", "validated", "merged"
+    }:
+        return True
+    if rec.get("delivery_route") == "stdout-only":
+        return False
+    return None
 
 
 def _cmd_collect(args) -> int:
@@ -300,8 +334,177 @@ def _cmd_collect(args) -> int:
         print(f"unknown invocation: {inv}", file=sys.stderr)
         return 2
     rec = journal.data["invocations"][inv]
-    delivered = rec["state"] in {"delivered", "output-received", "validated", "merged"}
+    delivered = _delivery_status(rec)
     return _collect_one(tp, journal, inv, rec["participant"], args.timeout, delivered)
+
+
+def _cmd_handoff(args) -> int:
+    """同じinvocationの依頼を固定し、明示--apply時だけ選択した席へ搬出する。"""
+    from . import handoff
+
+    if not (topic_dir(Path(args.root), args.slug) / "minutes.md").is_file():
+        print(json.dumps({"ok": False, "reason": "unknown-topic", "exit_code": 2}))
+        return 2
+    tp = ensure_topic(Path(args.root), args.slug)
+    try:
+        result = handoff.prepare(
+            tp, args.invocation, transport=args.transport,
+            workspace=args.workspace, surface=args.surface,
+            script=Path(args.cmux_script) if args.cmux_script else None,
+        )
+        if args.apply and result.get("ok"):
+            result = handoff.deliver(tp, args.invocation, timeout_s=args.timeout)
+    except (ValueError, OSError) as exc:
+        result = {"ok": False, "reason": "handoff-invalid", "detail": str(exc)}
+    payload = {**result, "invocation": args.invocation,
+               "exit_code": 0 if result.get("ok") else 1}
+    _write_last_result(tp, payload)
+    print(json.dumps(payload, ensure_ascii=False, indent=1))
+    return payload["exit_code"]
+
+
+def _cmd_followup(args) -> int:
+    """回収後の戻し先と通知証拠を固定する。外部送信はnative tool側が担う。"""
+    from . import followup
+
+    if not (topic_dir(Path(args.root), args.slug) / "minutes.md").is_file():
+        print(json.dumps({"ok": False, "reason": "unknown-topic"}))
+        return 2
+    tp = ensure_topic(Path(args.root), args.slug)
+    try:
+        if args.action == "prepare":
+            if not args.target_thread:
+                raise ValueError("prepare requires --target-thread")
+            result = followup.prepare(tp, args.invocation, args.target_thread)
+        elif args.action == "claim":
+            result = followup.claim(tp, args.invocation)
+        elif args.action == "record":
+            if not all((args.target_thread, args.message_sha256, args.receipt)):
+                raise ValueError("record requires --target-thread, --message-sha256 and --receipt")
+            receipt_path = Path(args.receipt)
+            with receipt_path.open("rb") as stream:
+                raw = stream.read(65537)
+            if len(raw) > 65536:
+                raise ValueError("receipt exceeds 64 KiB")
+            receipt = json.loads(raw)
+            result = followup.record_delivery(
+                tp, args.invocation, args.target_thread, args.message_sha256, receipt,
+            )
+        else:
+            result = followup.status(tp, args.invocation)
+    except (ValueError, OSError, UnicodeError) as exc:
+        result = {"ok": False, "reason": "followup-invalid", "detail": str(exc)}
+    print(json.dumps(result, ensure_ascii=False, indent=1))
+    return 0 if result.get("ok") else 1
+
+
+def _cmd_handoff_status(args) -> int:
+    """搬出receiptをreadbackする。再送・再開はしない。"""
+    from . import handoff
+
+    if not (topic_dir(Path(args.root), args.slug) / "minutes.md").is_file():
+        print(json.dumps({"ok": False, "reason": "unknown-topic", "exit_code": 2}))
+        return 2
+    tp = ensure_topic(Path(args.root), args.slug)
+    try:
+        result = handoff.status(tp, args.invocation)
+    except (ValueError, OSError) as exc:
+        result = {"ok": False, "reason": "handoff-invalid", "detail": str(exc)}
+    print(json.dumps(result, ensure_ascii=False, indent=1))
+    return 0 if result.get("ok") else 1
+
+
+def _cmd_cancel(args) -> int:
+    """回収を取り消す。席の実行停止や外部メッセージ送信は行わない。"""
+    if not (topic_dir(Path(args.root), args.slug) / "minutes.md").is_file():
+        print(json.dumps({"ok": False, "reason": "unknown-topic", "exit_code": 2}))
+        return 2
+    tp = ensure_topic(Path(args.root), args.slug)
+    try:
+        result = watcher.cancel(tp, args.invocation)
+    except ValueError as exc:
+        result = {"ok": False, "reason": "invalid-invocation", "detail": str(exc)}
+    payload = {**result, "invocation": args.invocation,
+               "exit_code": 0 if result["ok"] else 1}
+    _write_last_result(tp, payload)
+    print(json.dumps(payload, ensure_ascii=False))
+    return payload["exit_code"]
+
+
+def _cmd_collect_pending(args) -> int:
+    """永続journalから未回収を発見する有限poll。AIの新規起動・再送はしない。"""
+    if not (topic_dir(Path(args.root), args.slug) / "minutes.md").is_file():
+        print(json.dumps({"ok": False, "reason": "unknown-topic", "exit_code": 2}))
+        return 2
+    tp = ensure_topic(Path(args.root), args.slug)
+    deadline = time.monotonic() + args.timeout
+    attempted = set()
+    results = {}
+    while True:
+        journal = Journal.load(tp)
+        for inv, rec in journal.data["invocations"].items():
+            if inv in attempted or rec["state"] in {"merged", "failed", "cancelled"}:
+                continue
+            if not any((tp.scratch / f"{inv}{suffix}").exists()
+                       for suffix in (".json", ".json.tmp")) and not (
+                           rec["state"] == "validated" and rec.get("response_sha256")
+                       ):
+                continue
+            try:
+                rc = _collect_one(tp, Journal.load(tp), inv, rec["participant"],
+                                  0, delivered=_delivery_status(rec), lock_timeout_s=0)
+            except LockTimeout:
+                # 搬出中・他collector使用中の席は、ほかの回答を妨げず次回に回す。
+                continue
+            attempted.add(inv)
+            results[inv] = {"exit_code": rc}
+        journal = Journal.load(tp)
+        pending = [inv for inv, rec in journal.data["invocations"].items()
+                   if rec["state"] not in {"merged", "failed", "cancelled"}]
+        if not pending or time.monotonic() >= deadline:
+            break
+        time.sleep(min(args.poll_interval, max(0, deadline - time.monotonic())))
+        # 不完全tmpは次の観測で再検査できる。終端failedは自動再試行しない。
+        attempted = {inv for inv in attempted
+                     if journal.data["invocations"][inv]["state"] in {"merged", "failed", "cancelled"}}
+    merged = [inv for inv, rec in journal.data["invocations"].items()
+              if rec["state"] == "merged"]
+    failures = [{"invocation": inv, "detail": rec["detail"]}
+                for inv, rec in journal.data["invocations"].items()
+                if rec["state"] == "failed"]
+    cancelled = [inv for inv, rec in journal.data["invocations"].items()
+                 if rec["state"] == "cancelled"]
+    rc = 1 if failures else (2 if pending else 0)
+    payload = {
+        "ok": rc == 0, "reason": "errors" if failures else ("pending" if pending else "settled"),
+        "exit_code": rc, "topic_path": str(tp.root.resolve()),
+        "pending": pending, "merged": merged, "failed": failures,
+        "cancelled": cancelled, "attempted": results,
+        "follow_up": {
+            "state": "review-required" if merged else "not-required",
+            "invocations": merged,
+            "resume_executed": False,
+            "reason": "coordinator-resume-adapter-unavailable",
+        },
+    }
+    # last-resultは最新表示。復旧の正本はgit検証済みjournal、mtimeに依存しない。
+    _write_last_result(tp, payload)
+    print(json.dumps(payload, ensure_ascii=False, indent=1))
+    return rc
+
+
+def _nonnegative_seconds(value: str) -> float:
+    number = float(value)
+    if not math.isfinite(number) or number < 0:
+        raise argparse.ArgumentTypeError("有限の0以上の秒数が必要")
+    return number
+
+
+def _positive_seconds(value: str) -> float:
+    number = _nonnegative_seconds(value)
+    if number == 0:
+        raise argparse.ArgumentTypeError("0より大きい秒数が必要")
+    return number
 
 
 def _cmd_status(args) -> int:
@@ -439,7 +642,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_dis.add_argument("--participant", required=True, help="指名する参加者")
     p_dis.add_argument("--role-hint", default="", help="参加者への役割ヒント")
     p_dis.add_argument("--no-clipboard", action="store_true", help="搬出を行わない (stdout のみ)")
-    p_dis.add_argument("--timeout", type=float, default=900.0, help="回収 timeout 秒")
+    p_dis.add_argument("--timeout", type=_nonnegative_seconds, default=900.0, help="回収 timeout 秒")
     p_dis.add_argument("--tier", type=int, default=3, choices=[1, 3], help="relay tier (2 は未実装)")
     p_dis.add_argument(
         "--async",
@@ -453,9 +656,50 @@ def _build_parser() -> argparse.ArgumentParser:
     p_col = sub.add_parser("collect", help="既存 invocation を回収する")
     p_col.add_argument("slug")
     p_col.add_argument("--invocation", required=True)
-    p_col.add_argument("--timeout", type=float, default=900.0)
+    p_col.add_argument("--timeout", type=_nonnegative_seconds, default=900.0)
     p_col.add_argument("--root", required=True)
     p_col.set_defaults(func=_cmd_collect)
+
+    p_ho = sub.add_parser("handoff", help="依頼を固定し、--apply時だけ既存席へ搬出する")
+    p_ho.add_argument("slug")
+    p_ho.add_argument("--root", required=True)
+    p_ho.add_argument("--invocation", required=True)
+    p_ho.add_argument("--transport", choices=("cmux", "claude-desktop"), required=True)
+    p_ho.add_argument("--workspace", help="CMUX workspace UUID")
+    p_ho.add_argument("--surface", help="CMUX surface UUID")
+    p_ho.add_argument("--cmux-script", help="既存cmux_file_signal.pyの絶対パス")
+    p_ho.add_argument("--apply", action="store_true", help="固定した依頼を選択済み搬送へ渡す")
+    p_ho.add_argument("--timeout", type=_positive_seconds, default=30.0)
+    p_ho.set_defaults(func=_cmd_handoff)
+
+    p_hs = sub.add_parser("handoff-status", help="搬出receiptと回収状態を読む")
+    p_hs.add_argument("slug")
+    p_hs.add_argument("--root", required=True)
+    p_hs.add_argument("--invocation", required=True)
+    p_hs.set_defaults(func=_cmd_handoff_status)
+
+    p_follow = sub.add_parser("followup", help="回収後の元担当への通知を固定・照合する")
+    p_follow.add_argument("slug")
+    p_follow.add_argument("--root", required=True)
+    p_follow.add_argument("--invocation", required=True)
+    p_follow.add_argument("--action", choices=("prepare", "claim", "record", "status"), default="status")
+    p_follow.add_argument("--target-thread")
+    p_follow.add_argument("--message-sha256")
+    p_follow.add_argument("--receipt")
+    p_follow.set_defaults(func=_cmd_followup)
+
+    p_pending = sub.add_parser("collect-pending", help="journalから未回収を発見して有限待機で回収")
+    p_pending.add_argument("slug")
+    p_pending.add_argument("--root", required=True)
+    p_pending.add_argument("--timeout", type=_nonnegative_seconds, default=0.0)
+    p_pending.add_argument("--poll-interval", type=_positive_seconds, default=2.0)
+    p_pending.set_defaults(func=_cmd_collect_pending)
+
+    p_cancel = sub.add_parser("cancel", help="invocationの回収を取消（席の停止は別）")
+    p_cancel.add_argument("slug")
+    p_cancel.add_argument("--root", required=True)
+    p_cancel.add_argument("--invocation", required=True)
+    p_cancel.set_defaults(func=_cmd_cancel)
 
     p_st = sub.add_parser("status", help="round / invocation / KPI / 失敗統計を表示する")
     p_st.add_argument("slug")
@@ -509,5 +753,14 @@ def main(argv: list[str] | None = None) -> int:
         return 4
 
 
+def entrypoint() -> int:
+    """プロセスのCLI入口は日本語・JSONをUTF-8で出力する。"""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8")
+    return main()
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(entrypoint())

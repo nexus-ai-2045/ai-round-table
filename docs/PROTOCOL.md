@@ -163,3 +163,19 @@ dispatch の輻輳なので、状況を確認してから同じコマンドを�
 - 独立reviewをproduction実装へ渡す場合も、ホストは意見を要約・評価しない。
   `docs/REVIEW_TO_IMPLEMENTATION.md` のstart gate以降は別workflowであり、findingの採否と
   fan-inはproduction integration ownerが行う。
+
+## 6. Macの明示受渡し（2026-09-06）
+
+Mac優先・残実装GOに基づき、`handoff` / `handoff-status`を追加しました。
+[Mac受渡し手順](operations/mac-handoff.md)を参照してください。
+
+- `dispatch --no-clipboard --async`で発行し、`handoff`で既存席に結び付けます。
+- 既定は準備だけです。`--apply`は指定した搬送の実行です。無指定の席や新規AIを起動しません。
+- CMUXはworkspace/surface UUIDを明示し、既存file-signal wrapperを使用します。
+- Claude Desktop Codeはクリップボードへの搬出までです。画面への貼付・送信の確認は別です。
+- `submitted` / `clipboard-ready`は議事録merge・担当再開・採用成功を意味しません。
+- 依頼とsnapshotをinvocationごとに固定します。送達不明は再送せず、同じinvocationを回収します。
+- 取消・hash不一致・既回答を検出した時は送信を止め、検査または回収へ戻します。
+
+回収には`collect-pending`、回収取消には`cancel`も利用できます。
+従来の議事録直接編集禁止、裁定の人間所有、AI席の勝手な起動禁止は継続します。

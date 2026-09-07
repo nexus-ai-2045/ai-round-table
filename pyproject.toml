@@ -1,7 +1,18 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "ai-roundtable"
 version = "0.3.0"
 requires-python = ">=3.13"
+dependencies = ["PyYAML>=6.0"]
+
+[project.scripts]
+ai-roundtable = "roundtable.cli:entrypoint"
+
+[tool.setuptools.packages.find]
+include = ["roundtable*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

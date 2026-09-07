@@ -35,7 +35,7 @@ def test_collect_timeout(tmp_path):
     tp, j, inv = _setup(tmp_path)
     r = watcher.collect(tp, j, inv, "codex", timeout_s=0.1, poll_s=0.05)
     assert r == {"ok": False, "reason": "timeout"}
-    assert j.failures()
+    assert j.data["invocations"][inv]["state"] == "waiting"
 
 
 def test_collect_id_mismatch(tmp_path):

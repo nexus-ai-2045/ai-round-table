@@ -17,6 +17,7 @@ merge は hash 照合 fail-closed + escape による予約見出し防御を担�
    (1 の欠陥を再発させない)。裁くのは CEO が読む `git diff` (人間判断がメイン)。
 """
 import hashlib
+import json
 import re
 from pathlib import Path
 
@@ -183,6 +184,26 @@ def _escape_cell(value: str) -> str:
     return value.replace("|", "\\|").replace("\r", "").replace("\n", "<br>")
 
 
+class OpinionConflictError(ValueError):
+    """同じ invocation に別の内容、または検証不能な旧 receipt が存在する。"""
+
+
+def opinion_hash(opinion: dict) -> str:
+    """採用回答の正規化 JSON SHA256。空白/BOM と意味上の変更を区別する。"""
+    return hashlib.sha256(json.dumps(opinion, ensure_ascii=False, sort_keys=True,
+                                     separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def has_response(tp: TopicPaths, inv_id: str, participant: str, digest: str) -> bool:
+    """journal 更新直前に中断した merge の receipt を clean な議事録から読む。"""
+    with _lock(tp):
+        text = _read_verified(tp)
+        heading = f"### {participant} (invocation: {inv_id})"
+        return bool(re.search(r"^" + re.escape(heading) + r"\n"
+                              + re.escape(f"<!-- roundtable-response-sha256: {digest} -->")
+                              + r"$", text, re.MULTILINE))
+
+
 def merge_opinion(tp: TopicPaths, opinion: dict, round_no: int) -> None:
     """検証済み意見を議事録へ追記する。
 
@@ -194,12 +215,23 @@ def merge_opinion(tp: TopicPaths, opinion: dict, round_no: int) -> None:
     """
     with _lock(tp):
         text = _read_verified(tp)
+        heading = f"### {opinion['participant']} (invocation: {opinion['invocation_id']})"
+        receipt = f"<!-- roundtable-response-sha256: {opinion_hash(opinion)} -->"
+        existing = re.search(r"^### .* \(invocation: " + re.escape(opinion["invocation_id"])
+                             + r"\)$", text, re.MULTILINE)
+        if existing:
+            # receipt は見出し直後の機械生成行。本文から注入した一致は認めない。
+            tail = text[existing.end():]
+            if existing.group() == heading and tail.startswith("\n" + receipt + "\n"):
+                return
+            raise OpinionConflictError("invocation already exists with a different or legacy receipt")
         # Round 見出しの存在判定は行頭完全一致で行う。部分文字列だと escape 済み本文中の
         # 「\## Round N」に誤反応し、敵対 opinion が本物の見出し生成を抑止できる (レビュー M2)。
         round_heading_exists = re.search(rf"^## Round {round_no}$", text, re.MULTILINE)
         section = [
             None if round_heading_exists else f"\n## Round {round_no}",
-            f"\n### {opinion['participant']} (invocation: {opinion['invocation_id']})",
+            f"\n{heading}",
+            receipt,
             "",
             _escape_body(opinion["opinion"]),
             "",
@@ -211,11 +243,14 @@ def merge_opinion(tp: TopicPaths, opinion: dict, round_no: int) -> None:
                 f"| {_escape_cell(c['claim'])} | {c['evidence_type']} | "
                 f"{_escape_cell(c['evidence'])} |"
             )
-        _write_verified(
-            tp,
-            text + "\n".join(s for s in section if s is not None) + "\n",
-            f"merge round {round_no} {opinion['participant']}",
-        )
+        addition = "\n".join(s for s in section if s is not None) + "\n"
+        insert_at = len(text)
+        if round_heading_exists:
+            next_heading = re.search(r"^## ", text[round_heading_exists.end():], re.MULTILINE)
+            if next_heading:
+                insert_at = round_heading_exists.end() + next_heading.start()
+        _write_verified(tp, text[:insert_at] + addition + text[insert_at:],
+                        f"merge round {round_no} {opinion['participant']}")
 
 
 def write_verdict(tp: TopicPaths, verdict: str) -> None:

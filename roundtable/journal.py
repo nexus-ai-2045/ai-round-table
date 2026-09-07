@@ -3,7 +3,7 @@
 状態遷移 (DESIGN v6 §6 + v0.2 軸 C detector):
     prepared → delivered → output-received → validated → merged / failed
                  └→ delivery-unknown → output-received / failed
-前進のみ。merged / failed からの逆行は ValueError。
+通常は前進のみ。merged / failed / cancelled は終端。旧待機失敗の明示再開のみ別 API。
 
 並行 dispatch での記録消失対策 (2026-08-07 実測バグ / 診断 fix_options A を採用):
     save() は「ロード時のスナップショットを全文上書き」ではなく
@@ -23,6 +23,8 @@ STATES = {
     "prepared",
     "delivered",
     "delivery-unknown",
+    "waiting",
+    "cancelled",
     "output-received",
     "validated",
     "merged",
@@ -105,6 +107,12 @@ def _merge_invocations(disk: dict, local: dict, conflicts: list) -> dict:
             continue
         if drec == lrec:
             continue
+        # 明示待機再開の世代を古い dispatcher の failed snapshot で戻さない。
+        de, le = drec.get("recovery_epoch", 0), lrec.get("recovery_epoch", 0)
+        if de != le:
+            if le > de:
+                out[inv] = lrec
+            continue
         ds, ls = drec.get("state"), lrec.get("state")
         if ds == ls:
             out[inv] = lrec  # detail だけの差 → 自分の最新を採る
@@ -144,8 +152,14 @@ def _merge_data(disk: dict, local: dict) -> dict:
 def _transition_allowed(current: str, new: str) -> bool:
     if new == current:
         return True
-    if current in {"merged", "failed"}:
+    if current in {"merged", "failed", "cancelled"}:
         return False  # 終端からの逆行・離脱は不可
+    if new == "cancelled":
+        return True
+    if new == "waiting":
+        return current in {"prepared", "delivered", "delivery-unknown", "waiting"}
+    if current == "waiting":
+        return new in {"output-received", "validated", "merged", "failed"}
     if current == "delivery-unknown":
         # 送達は未確定でも、既送信だった場合の成果物は後から回収できる。
         return new in {"output-received", "validated", "merged", "failed"}
@@ -212,9 +226,32 @@ class Journal:
         current = rec["state"]
         if not self._transition_allowed(current, state):
             raise ValueError(f"invalid transition: {current} -> {state}")
+        if current == "delivered" or state == "delivered":
+            rec["delivery_confirmed"] = True
         rec["state"] = state
         rec["detail"] = detail
         self.save()
+
+    def reopen_wait_failure(self, inv: str) -> bool:
+        """明示 collect 専用。過去の待機失敗だけを ledger 経由で再開する。
+
+        呼出し側は invocation lock を保持する。通常の状態遷移を緩めず、
+        旧失敗理由を記録してから置換し、stale snapshot からの逆行を防ぐ。
+        """
+        with FileLock(self.tp.lock(_JOURNAL_NAME)):
+            raw = ledger.read_state(self.tp.journal)
+            data = json.loads(raw.decode("utf-8")) if raw else self.data
+            rec = data["invocations"][inv]
+            reason = rec.get("detail", "").split(":", 1)[0]
+            if rec["state"] != "failed" or reason not in {"timeout", "stalled-tmp"}:
+                return False
+            rec.setdefault("wait_failures", []).append(rec.get("detail", ""))
+            rec.update(state="waiting", detail="explicit-collect-retry",
+                       recovery_epoch=rec.get("recovery_epoch", 0) + 1)
+            ledger.write_state(self.tp.journal, json.dumps(data, ensure_ascii=False, indent=1),
+                               f"minutes({self.tp.root.name}): reopen wait failure")
+            self.data = data
+            return True
 
     @staticmethod
     def _transition_allowed(current: str, new: str) -> bool:

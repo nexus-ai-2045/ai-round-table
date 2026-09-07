@@ -44,11 +44,19 @@ jobs:
           git config --global init.defaultBranch main
 
       - name: install
-        run: python -m pip install --upgrade pip pytest
+        run: python -m pip install --upgrade pip pytest .
+
+      - name: installed CLI smoke
+        # 配布依存とconsole入口を、source checkout外から検査する。
+        run: python -c "import tempfile, subprocess; from importlib.metadata import requires; assert requires('ai-roundtable'); import yaml; subprocess.run(['ai-roundtable', '--help'], cwd=tempfile.gettempdir(), check=True)"
+
+      - name: test isolation guard
+        # 保存先の保護を先に確認し、失敗時はledgerを書き込む試験へ進まない。
+        run: python -m pytest -q tests/test_basetemp_safety.py
 
       - name: pytest
         # 「python -m」が必須（cwd を sys.path に積んで import roundtable を解決する。
         # 素の pytest 起動に変えると ModuleNotFoundError で全滅する）。
         # -rx で xfail（未検証の前提）も一覧に出す。CONTRIBUTING の約束 2 と対。
         # --durations=20 は初実走のホットスポット実測用。
-        run: python -m pytest -q -rx --durations=20
+        run: python -m pytest -q -rx --durations=20 --ignore=tests/test_basetemp_safety.py

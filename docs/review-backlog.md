@@ -636,3 +636,36 @@ Independent 17.2 / Decentralized 7.8 / Centralized 4.4 という**数値の一�
 `A_e^trace` が何を測っているかを確認しなかった。数字が合っていたので通してしまった。
 **「出典が実在し数値が一致する」ことと「その数値が主張を支える」ことは別**。
 二次情報の一次検証は、数値照合ではなく定義の確認まで行って初めて成立する。
+
+## PR #22の追加レビュー対応（2026-09-08）
+
+| 指摘 | 根本修正と回帰確認 |
+|---|---|
+| P1: 送信中の回答をpending回収すると状態遷移が壊れる | 既存invocation排他で送信から状態確定までを保護。回収は解放後に実行。巡回はbusy席を待たず他の回答へ進み、次回に再確認する |
+| P2: 同じ通知先UUIDの表記差を拒否する | 準備・記録引数・receiptを同じUUID正規化へ統一。不正値と別UUIDは引き続き拒否する |
+| P2: 取消の不正invocationでtraceback | 構造化したinvalid-invocationの失敗結果を返す |
+| P2: 採用commit後の停止でscratch差替えを失敗扱い | validatedの保存hashと議事録の採用証跡を先に照合。scratch欠落も巡回で発見し、採用済み回答を復旧する |
+
+統合後の関連試験は68件成功。追加したロック待機引数の宣言漏れは独立レビューで検出し、修正後に再実行した。
+配布依存とconsole入口もCIで検査するため、パッケージを導入しcheckout外でCLIを起動する工程を追加した。
+
+試験のbasetemp誤指定で発生したローカルの議事録commitは保全branchへ分離し、提出branchは元のPR HEADから復旧した。
+試験履歴はリモートへ送っていない。再発防止として、checkout内のgitignore対象外basetempをfixture生成前に拒否する。
+製品branchのHEAD不変と拒否・許可条件の回帰を確認した。
+
+配布版CIのWindows実行で日本語helpのUnicodeEncodeErrorを検出した。プロセスのCLI入口だけで
+stdout/stderrをUTF-8へ設定し、console scriptと`python -m`の両入口を統一した。
+ライブラリとして呼ぶ`main(argv)`は変更せず、cp1252環境を再現する2回帰と独立レビューが通った。
+
+## PR #22の再レビュー対応（2026-09-08）
+
+| 指摘 | 根本修正と回帰確認 |
+|---|---|
+| role_hint内のパスが固定snapshotより先に置換される | packet生成のsnapshot引数を設け、固定指示本文を照合して再構成。自由記述は保持 |
+| clipboard未対応OS・コマンド欠落が送達不明になる | 既存搬出と同じOS別コマンド選択を事前確認に使用。未送信はprepared、開始後の失敗はunknownを維持 |
+| waitingへの遷移で搬出成功履歴が消える | Journalのdelivered遷移で確定履歴を保存し、CLIの回収経路で共通参照。送達不明は成功扱いせず再送禁止を案内 |
+| symlinkのprepareとdeliverで名前検査が変わる | prepare時に解決後の実体名も検査し、後段で実行できない依頼を早期拒否 |
+
+Windowsのテスト隔離ガードは、末尾slashの照合がgitignoreの空行に一致扱いとなる経路をCI診断で特定した。
+生成予定の子ファイルでignoreを検査する方式へ修復し、CRLFの独立git repoでも許可・拒否を確認した。
+パス別名という仮説の追加コードは実測に合わないため除去した。ガードを本試験より先にCIで検査する。

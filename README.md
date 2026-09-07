@@ -1,4 +1,4 @@
-# ai-round-table
+# ai-round-table：複数AIの議論と回答回収
 
 **人間が座長を務める、マルチ AI 円卓のディスパッチャ。**
 
@@ -38,6 +38,13 @@
 **dispatcher は AI を実行しない。** 議題 packet を配って議事録を束ねるだけの決定的なツール。
 
 ## 使い方（できること）
+
+Macでは `uv tool install /absolute/path/to/ai-round-table` で
+`ai-roundtable` コマンドを登録できます。作業ディレクトリへの参照を残さず導入するため、
+導入後にソースを変更した場合は再インストールします。開発中に変更を即時反映したい場合だけ
+`--editable` を追加します。登録後はリポジトリ外から
+`ai-roundtable --help` を使えます。以下の `python -m roundtable.cli` と同じ入口です。
+回収後に元担当へ結果を戻す手順は [担当への返却](docs/operations/coordinator-followup.md) を参照してください。
 
 ```bash
 # 0. 環境診断（Tier1 が使えるか）
@@ -118,16 +125,17 @@ Tier1 が失敗したら**自動で Tier3 に落ちる**（勝手に Tier2 へ�
 | Codex | Tier1 実往復を実測。アプリのチャット一覧に席が出ることも確認済み |
 | Grok | Tier1（ACP）で意見の書き込みまで実測 |
 | Gemini | 未実装（Antigravity 経由の 3 経路を調査済み） |
-| Claude Code | **席にしない**（下記） |
+| CMUX上のCodex | Macで共通修復候補を指定した実席往復・回収・担当返却を確認。共通の正式反映は別途必要 |
+| Claude Desktop Code | Macの依頼固定・clipboard受渡し・回答回収を実装。指定実席の往復は接続障害により未確認 |
 
-**ホストランタイムを席にしない**のは意図的。ホストは座長との会話を全部見ているので、
+**司会を担う実行主体と、独立した意見を求める参加席は分けます。** これは製品名による除外ではなく役割の境界です。ホストは座長との会話を全部見ているので、
 「独立した参加者の意見」を出すと、司会が自分の望む結論を参加者の口から言わせるのと同じに
 なる。加えて実装当事者は自分の実装を擁護する方向に偏る。**頭数より独立性を優先**する。
 
 ### 制約
 
-- Windows で開発・実測。POSIX 経路は CI (ubuntu-latest) で全テストが通ることまで確認済み。
-  実席（Codex / Grok アプリ）との Tier1 実往復は Windows でしか実測していない
+- Windowsの既存Tier1実測と、MacのCMUX受渡し実測は別の搬送経路です。
+  Macの試験・導入・外部接続の残務は[検証記録](docs/operations/collection-recovery-verification.md)を参照してください。
 - Python 3.13 以上
 - 席の追加には各 AI 側の接続経路の調査が要る
 - Tier2（UI 自動化）は設計のみで未実装
@@ -141,6 +149,10 @@ Tier1 が失敗したら**自動で Tier3 に落ちる**（勝手に Tier2 へ�
 | [docs/PROTOCOL.md](docs/PROTOCOL.md) | 席と dispatcher の間の契約 |
 | [docs/adr/](docs/adr/) | アーキテクチャ決定記録（0001: 公式 Codex SDK への段階移行） |
 | [docs/operations/](docs/operations/) | 運用記録 |
+| [回答の発見・回収と担当再開](docs/operations/collection-recovery.md) | 有限待機、遅着回収、取消、再開の保証境界 |
+| [Macの席への受渡し](docs/operations/mac-handoff.md) | handoff / handoff-status、送達不明時の再送防止 |
+| [Mac優先のDesktop接続](docs/operations/mac-desktop-connection.md) | CMUX・Round Table・Claude Desktop Codeの接続と保証範囲 |
+| [CMUXの4席案](docs/operations/cmux-four-ai-proposal.md) | 入口調査と採否後の最小スモーク案 |
 | [docs/review-backlog.md](docs/review-backlog.md) | レビュー指摘と対応の記録（撤回した判断も含む） |
 | [docs/plans/](docs/plans/) | 実装計画 |
 | [SECURITY.md](SECURITY.md) | 脅威モデル |
