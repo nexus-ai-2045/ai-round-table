@@ -6,6 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "ai-roundtable"
 version = "0.3.0"
 requires-python = ">=3.13"
+dependencies = ["PyYAML>=6.0"]
 
 [project.scripts]
 ai-roundtable = "roundtable.cli:main"

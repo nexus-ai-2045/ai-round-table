@@ -14,6 +14,13 @@ WS = '11111111-1111-4111-8111-111111111111'
 SURFACE = '22222222-2222-4222-8222-222222222222'
 
 
+@pytest.fixture(autouse=True)
+def cmux_on_path(monkeypatch):
+    original = handoff.shutil.which
+    monkeypatch.setattr(handoff.shutil, 'which',
+                        lambda name: '/mock/cmux' if name == 'cmux' else original(name))
+
+
 def setup(tmp_path, participant='codex'):
     tp = ensure_topic(tmp_path, 'handoff')
     minutes.create(tp, 'Handoff', [participant])
@@ -192,3 +199,32 @@ def test_capture_can_freeze_after_fast_response_but_cannot_send(tmp_path):
     (tp.scratch / f'{inv}.json').write_text('{}')
     handoff.capture_request(tp, inv, packet.build(tp, 'codex', inv))
     assert handoff.prepare(tp, inv, **opts)['reason'] == 'response-present'
+
+
+@pytest.mark.parametrize('failure', ['missing-cmux', 'missing-dependency', 'timeout', 'oserror'])
+def test_preflight_failure_preserves_prepared_and_never_sends(tmp_path, monkeypatch, failure):
+    tp, inv, opts = setup(tmp_path)
+    handoff.prepare(tp, inv, **opts)
+    original = subprocess.run
+    calls = []
+    def run(args, **kwargs):
+        if str(opts['script']) not in args:
+            return original(args, **kwargs)
+        calls.append(args)
+        assert args == [handoff.sys.executable, opts['script'], '--help']
+        assert kwargs['shell'] is False
+        assert json.loads((tp.root / 'deliveries' / f'{inv}.json').read_text())['state'] == 'prepared'
+        if failure == 'timeout':
+            raise subprocess.TimeoutExpired(args, 1, stderr=b'private error')
+        if failure == 'oserror':
+            raise OSError('private error')
+        return subprocess.CompletedProcess(args, 1, b'', b'private dependency error')
+    if failure == 'missing-cmux':
+        monkeypatch.setattr(handoff.shutil, 'which', lambda name: None)
+    monkeypatch.setattr(handoff.subprocess, 'run', run)
+    result = handoff.deliver(tp, inv)
+    assert not result['ok'] and result['reason'] == 'cmux-preflight-failed'
+    assert result['state'] == 'prepared'
+    assert 'private' not in json.dumps(result)
+    assert handoff.status(tp, inv)['state'] == 'prepared'
+    assert len(calls) == (0 if failure == 'missing-cmux' else 1)

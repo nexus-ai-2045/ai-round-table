@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import shutil
 from pathlib import Path
 import subprocess
 import sys
@@ -178,6 +179,25 @@ def status(tp: TopicPaths, inv_id: str) -> dict:
         return _result(record)
 
 
+def _cmux_preflight(script: str, timeout_s: float) -> dict | None:
+    """送信しない起動検査。正式wrapperのargparse --helpはmain処理前に終了する。"""
+    if shutil.which("cmux") is None:
+        return {"reason": "cmux-preflight-failed", "preflight_error": "cmux-not-on-path"}
+    try:
+        result = subprocess.run([sys.executable, script, "--help"], shell=False,
+                                capture_output=True, timeout=timeout_s)
+    except (OSError, subprocess.SubprocessError) as exc:
+        stderr = getattr(exc, "stderr", None) or b""
+        if isinstance(stderr, str):
+            stderr = stderr.encode("utf-8")
+        return {"reason": "cmux-preflight-failed", "preflight_error": type(exc).__name__,
+                "stderr_sha256": _hash(stderr)}
+    if result.returncode != 0:
+        return {"reason": "cmux-preflight-failed", "preflight_error": "wrapper-startup-failed",
+                "returncode": result.returncode, "stderr_sha256": _hash(result.stderr or b"")}
+    return None
+
+
 def deliver(tp: TopicPaths, inv_id: str, timeout_s=30) -> dict:
     """Explicit one-shot delivery. Every uncertain outcome permanently blocks resend."""
     if not math.isfinite(timeout_s) or timeout_s <= 0:
@@ -196,6 +216,9 @@ def deliver(tp: TopicPaths, inv_id: str, timeout_s=30) -> dict:
             return blocked
         if record["transport"] == "cmux":
             script = _script(record["script"])
+            preflight = _cmux_preflight(script, timeout_s)
+            if preflight is not None:
+                return _result(record, ok=False, **preflight)
             args = [sys.executable, script, "--message-file", str(request.resolve()),
                     "--workspace", record["workspace"], "--surface", record["surface"],
                     "--path-only", "--no-control-block", "--mode", "pointer", "--transport", "file",

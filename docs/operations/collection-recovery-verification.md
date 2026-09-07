@@ -1,11 +1,11 @@
 # 回収修正の検証記録
 
 初回検証: 2026-09-06、macOS / Python 3.14.5。
-更新: 2026-09-07。過去の合格記録と、追加変更後の検証を分けて記載します。
+更新: 2026-09-08。過去の合格記録と、追加変更後の検証を分けて記載します。
 
 - branch: `fix/collection-recovery-clean-20260906`
 - base: `baaeeeff4da575e7bdf68d7bbfa88556c44a0048`
-- 状態: ローカル差分。コードcommit、push、PR、mergeは未実施。
+- 提出先: [PR #22](https://github.com/nexus-ai-2045/ai-round-table/pull/22)。mergeは未実施。以下の日付別試験は当時の差分に対する記録です。
 - 全体試験: `python3 -m pytest -q --basetemp=.pytest-tmp-final` → **299 passed in 104.88s**。
 - `git diff --check`: 成功。
 - 独立Pythonレビュー: 生存ロックのmtime失効問題を検出・修正後、残P1/P2なし。
@@ -71,3 +71,19 @@ last-resultはok/mergedでした。元の回答原文・議事録・製品成果
 Desktopの実席での依頼・回答の往復と、休止中の座長の自動再開は未完了です。
 通知outboxの実装・通常CLIの起動確認だけでは、これらの成立を証明できません。
 GUIの読取りを、製品の自動Desktop送信・再開adapterの実装とは扱いません。
+
+## 配布環境の事前検査と実席スモーク（2026-09-08）
+
+固定wheelからの初回cmux実行で、共通wrapperが使うPyYAMLの配布依存漏れを検出しました。
+パッケージ依存へ追加し、同じPythonでのwrapper起動とcmuxのPATHを送信前に検査するよう修復しました。
+事前検査失敗はpreparedを維持し、実送信開始後の送達不明・再送禁止を維持します。
+
+- 関連テスト: **26 passed**。独立レビュー: 重大指摘なし。
+- wheelを再構築し、通常CLIへPyYAMLとともに再導入しました。
+- cmux公式アプリへの利用者用CLIリンクを作り、`cmux ping`のPONGを確認しました。
+- 専用Astra実席を起動し、入力待ちを確認しました。
+- 次の送信試行は共通resolverのUUID解決失敗により停止しました。回答往復は未成立です。
+- 共通resolverの修復・回帰検証・runtime反映は既存の共通基盤担当へ依頼済みです。
+  製品側でUUID照合を緩めたり、送達不明の依頼を再送したりしていません。
+
+355件の全体試験は上記事前検査追加前の結果です。PRのCI結果と実席の往復成立は別に判定します。
