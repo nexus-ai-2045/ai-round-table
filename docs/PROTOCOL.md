@@ -108,12 +108,12 @@ python -m roundtable.cli status <slug> --root <minutes-root>
 
 | コマンド | 用途 |
 |---|---|
-| `new-topic <slug> --topic <題> --participants a,b [--background B] [--root R]` | 議題開始・minutes.md 生成 |
-| `set-background <slug> --text <文> [--root R]` | ## 背景 を更新 (S1) |
-| `dispatch <slug> --participant <ai> [--role-hint H] [--tier 1\|3] [--async] [--no-clipboard] [--timeout SEC] [--root R]` | snapshot → packet → relay → (既定) collect |
-| `collect <slug> --invocation <id> [--timeout SEC] [--root R]` | async dispatch 後の回収 |
-| `status <slug> [--root R]` | round / invocation / human_actions / failure_stats |
-| `close <slug> --verdict <裁定> [--root R]` | 未解決一覧 → verdict → closed |
+| `new-topic <slug> --topic <題> --participants a,b [--background B] --root R` | 議題開始・minutes.md 生成 |
+| `set-background <slug> --text <文> --root R` | ## 背景 を更新 (S1) |
+| `dispatch <slug> --participant <ai> [--role-hint H] [--tier 1\|3] [--async] [--no-clipboard] [--timeout SEC] --root R` | snapshot → packet → relay → (既定) collect |
+| `collect <slug> --invocation <id> [--timeout SEC] --root R` | async dispatch 後の回収 |
+| `status <slug> --root R` | round / invocation / human_actions / failure_stats |
+| `close <slug> --verdict <裁定> --root R` | 未解決一覧 → verdict → closed |
 | `doctor [--skip-start] [--json]` | Codex Tier1 / Desktop socket / 推奨 tier の環境診断 |
 
 KPI (v0.2): 1 議題あたり `human_actions` ≤ 3 (議題宣言 / 指名 / 裁定)。
@@ -122,7 +122,8 @@ Tier3 貼付が必要な席は +1 が journal に `tier3_paste_required` とし�
 運用前に一度 `doctor` を走らせ、`recommended_tier` を見る。`thread_start: timeout` かつ
 Desktop socket 不在なら **実席は Tier3 貼付が本線** (2026-08-07 実測)。
 
-`--root` はテスト・複数環境切替用。通常運用では省略しデフォルトの minutes root を使う。
+議題操作では`--root`を必ず指定します。議題データは`ROOT/minutes/<slug>/`配下です。
+既存journalの所在と照合し、同じROOTを使います。`doctor --root`は任意の診断cwdです。
 
 ## 4. 失敗分類と対応 (DESIGN v6 §6)
 
