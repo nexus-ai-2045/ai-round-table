@@ -33,9 +33,13 @@ fan-in証跡へ接続する。既存roundtableの議事録、packet、relay、sc
    **cluster が参照する finding は `<reviewer>:<id>` 形式**で書く。独立レビューは席同士が
    採番を相談しないため、素の id では grok の `R1` と claude の `R1` が 1 件に潰れ、
    片方だけを参照していても「全件割当済み」に見えてしまう。
+   `reviewer` と finding `id` 自体には区切り文字 `:` を許さない。
 5. `owned_files` は重複のないrepo相対pathである。区切りは `/` のみ (`\` は deny)。
    綴りが git の出力と食い違うと fan-in の所有照合が必ず外れるため、schema 段階で止める。
 6. 権限境界は少なくとも `merge/release/settings/visibility/auth/secret/delete/force` を禁止する。
+   これらを `allowed` にも書いた矛盾した境界は deny する。
+7. default branchは`main`/`master`という名前やcached `origin/HEAD`の推測ではなく、
+   `git ls-remote --symref origin HEAD`でremote実体から判定する。判定不能なら安全側に停止する。
 
 ```powershell
 python -m roundtable.cli workflow-gate workflow.json --phase start --repo <worktree>
@@ -43,20 +47,25 @@ python -m roundtable.cli workflow-gate workflow.json --phase start --repo <workt
 
 ### fan-in
 
-start契約に加え、exact commit SHA、成功したtest command、implementation ownerのterminal化、
+start契約に加え、exact commit SHA、cluster IDに結び付いた成功test receipt、全cluster ownerのterminal化、
 統合後再検証、production integration owner、`single_pr: true` を要求する。live Gitでbaseから
-commitまでの変更ファイルが`owned_files`内だけかを照合する。
+commitまでの変更ファイルが`owned_files`内だけかを照合し、最終treeがbaseと同一なら
+「途中で変更して全て戻しただけ」の空の実装としてdenyする。
 
-照合は `git diff --no-renames -z --name-only` で取る。
+照合は `git log -m --format= --no-renames -z --name-only base..commit` で、range内の
+各commitが触った全pathを取る。終端treeだけを比較すると、所有外ファイルを途中で変更して
+後のcommitで戻した履歴が消えるため。
 
 - `--no-renames`: 既定の rename 検出は改名後の名前しか返さないため、所有外ファイルを
   owned な名前へ改名すると所有権検査が**素通り**する (fail-open)。
 - `-z`: 非 ASCII path が `core.quotepath` でクォート化され、照合が全部外れるのを避ける。
 
-worktree の clean 検査は start だけでなく **fan-in でも行う**。所有外の未commit/未追跡を
+worktree の clean 検査は start だけでなく **fan-in でも行い**、
+`--untracked-files=all` を明示する。repo設定で未追跡を隠した状態でも、所有外の未commit/未追跡を
 残したまま「所有ファイルしか触っていない」と通ってしまうため。
 `commit_sha` が `base_commit` と同一 (実装 commit ゼロ) の receipt も deny する
 (`merge-base --is-ancestor` は自分自身を祖先と判定するため、これだけでは弾けない)。
+空の子commitも変更pathが0件なのでdenyする。
 
 ```powershell
 python -m roundtable.cli workflow-gate workflow.json --phase fan-in --repo <worktree>
@@ -93,7 +102,7 @@ gate成功は「安全に採用済み」「merge可」を意味しない。構�
     "owner": "production-integration-owner",
     "single_pr": true,
     "commit_sha": "89abcdef0123456789abcdef0123456789abcdef",
-    "tests": [{"command": "python -m pytest", "status": "passed"}],
+    "tests": [{"command": "python -m pytest", "status": "passed", "cluster_ids": ["RC1"]}],
     "integration_reverified": true,
     "terminal_lanes": ["implementation-lane"]
   }
