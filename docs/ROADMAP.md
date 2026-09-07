@@ -29,7 +29,7 @@
 
 | 担当・保存先 | 所有する責務 | 他へ渡すもの |
 |---|---|---|
-| このCodexタスク | 全体の採否、優先順位、子担当の回収、製品PR・導入・検証・整理、完了判定 | 共通基盤の修復依頼と実測結果を担当へ返す |
+| このCodexタスク | 製品実装のintegration ownerとして採否・優先順位・子担当回収・PR・導入・検証・整理を担う。議論参加席への裁定はユーザーが担う | 共通基盤の修復依頼と実測結果を担当へ返す |
 | ai-round-table | packet、議事録・journal、受渡し契約、回収、followup記録、CLI・試験・製品文書 | CMUX制御や定期起動は既存の外部機構を利用 |
 | Projects共通基盤の担当 | CMUXの正式wrapper・席解決など複数製品で使う基盤 | 変更先PRと正式runtimeへの反映証拠 |
 | 各AI・サブエージェント | 指定された独立範囲の実装・レビュー・回答と証拠 | 主担当へ結果・残務を返す。送信成功だけで完了にしない |
@@ -49,7 +49,7 @@ Windows固有機能の拡張、Gemini等の新しい席、4席同時運用、他
 | 現在の達成状態と証拠への参照 | [検証記録](operations/collection-recovery-verification.md)冒頭の状態表 |
 | レビュー指摘の採否と経緯 | GitHub PRのレビュー状態と[レビュー台帳](review-backlog.md) |
 | 導入・更新・復旧手順と通常CLIの配置 | [Mac受渡し手順](operations/mac-handoff.md) |
-| 議題ごとの回答と実行状態 | 対象ROOTのminutes.md、journal.json、既存followup記録。製品repoへ複製しない |
+| 議題ごとの回答と実行状態 | 指定ROOTのminutes/<topic>/配下のminutes.md、journal.json、既存followup記録。別の正本へ複製しない |
 | 実装の正式版 | nexus-ai-2045/ai-round-tableのmain。作業branchは採用前候補 |
 
 ## 次に進む順序

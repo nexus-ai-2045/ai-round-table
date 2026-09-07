@@ -23,8 +23,9 @@
 
 ## 1. 目的
 
-Codex / CC / Grok / Gemini を Windows 上でリンクし、人間 (CEO) が司会するマルチ AI
-壁打ち・多者会談基盤。新 UI なし。cmux 非依存。
+人間 (CEO) が司会するマルチ AI の壁打ち・多者会談基盤。現在はユーザー指定によりMacを優先し、
+既存Windows経路も維持する。新UIは作らず、CMUXは任意の搬送経路として共通wrapperを利用する。
+現在の境界は[ADR-0003](adr/0003-mac-operation-boundary.md)、進行計画は[ROADMAP](ROADMAP.md)を参照。
 
 ## 2. 決定事項
 
@@ -40,9 +41,9 @@ Codex / CC / Grok / Gemini を Windows 上でリンクし、人間 (CEO) が司�
 | D8 | Evidence 型付け (observed/log/diff/source/argument/none)。自己申告であり検証済み表示にしない | Codex1st#8 |
 | D9 | round 上限 3。収束の自動判定はしない | CC#1 + ai-council-framework の独立採用例 |
 | D10 | v0.1 に要約層・コスト警告を入れない (raw 提示)。v0.2 で non-authoritative + 原文参照付きで導入 | Codex1st#7/#9 |
-| D11 | **CC (ホストランタイム) は席にしない**。参加者は異ベンダーの AI で埋める | 独立性 > 頭数 (下記 D11 節) |
+| D11 | **ホスト自身は独立した参加席を兼ねない**。Claude Desktopの別指定席はMac受渡し対象とする | 独立性 > 頭数 (下記 D11 節) |
 | D12 | **改ざん証跡は git に一本化**。`.integrity/` witness 層は廃止。lock は排他専用として維持 | witness は grok 席から届く (実測) = 検知不成立。git は既にあり、より強い (下記 D12 節) |
-| D13 | **議事録 root は必ず git 管理下**。dispatcher が検査し、なければ init する。実運用の正本 root は本 repo の `minutes/` | CEO 要件「議事録は Git 管理」をツールが強制する。引数任せにしない |
+| D13 | **議事録 root は必ず git 管理下**。dispatcher が検査し、なければ init する。議題の正本は指定ROOTの`minutes/<topic>/`配下。実運用ROOTの選定は別途固定する | CEO 要件「議事録は Git 管理」をツールが強制する。引数任せにしない |
 | D14 | **独立reviewとproduction実装を別workflowにする**。review成果物をstart gateとし、採否・root cause・ownership・receipt・fan-inはproduction integration ownerが持つ | ホストの非評価契約を壊さず、実装責任と単一PR closeoutを機械検査する (`docs/adr/0002-*.md`) |
 
 ## 3. アーキテクチャ
@@ -77,11 +78,15 @@ CEO（判断のみ: 議題・指名・裁定・打ち切り・割り込み）
 | 席 | 経路 | 状態 | 出典 |
 |---|---|---|---|
 | Codex | **自前 spawn の `codex app-server` + stdio JSONL** (JSON-RPC 2.0)。`thread/start·resume·read·list·name` / `turn/start·steer·interrupt`。VS Code 拡張・デスクトップアプリと同一プロトコル (stable 扱い)。**daemon 常駐管理は Unix 専用 (実測) のため使わない** | v0.1 spike 対象 | references/codex-app-server-README.ja.md (全文訳) |
-| CC | **ホスト専任。席にしない** (D11)。relay 不要 | 確定 (2026-08-07 CEO 判断) | 下記 D11 |
+| CC | **ホストと別の指定席を区別する** (D11)。Claude Desktop CodeへのMac受渡しを実装 | 実席接続状況は検証記録を参照 | 下記 D11 |
 | Grok | `grok agent serve` (WebSocket :2419 + secret) / `grok leader` (`~/.grok/leader.sock`, 複数 client で 1 backend 共有) / **ACP** | v0.2 spike | references/grok-build-integration.ja.md |
 | Gemini | **Antigravity 経由 3 経路**: 公式 Python SDK (`google.antigravity`) / コミュニティ ACP ラッパ (antigravity-acp) / agy への ACP native 実装 (公式 feature request 中)。agy 素体に serve 系なし (実測) | v0.2 spike (v5 の「✗」から昇格) | docs/architecture-ideal-vs-actual.md |
 
-### D11: CC を席にしない理由 (2026-08-07 確定)
+### D11: ホストと参加席の役割分離
+
+現在は製品名で除外せず、ホスト自身が独立した意見の席を兼ねない境界とする。
+Claude Desktop Codeの別指定席の実測状況は[検証記録](operations/collection-recovery-verification.md)を正本とする。
+以下は2026-08-07時点の判断経緯で、Mac対応後の状態は[ADR-0003](adr/0003-mac-operation-boundary.md)を参照。
 
 ホストは CEO との会話を全部見ている。議題の立て方も、CEO が何を気にしているかも、
 その設計を誰が書いたかも知っている。その状態で「独立した参加者の意見」を出すのは、
@@ -129,7 +134,7 @@ dispatcher が merge 前に照合する) は二重に間違っていた:
 
 D13 はこの前提を支える: 検知が git 依存になるため、**議事録が git 外に置かれた瞬間に
 検知が消える**。だから root の git 管理は運用注意ではなくツールの検査事項にする
-(new-topic 時に git work tree でなければ init。実運用の正本 root は本 repo の `minutes/`。
+(new-topic 時に git work tree でなければ init。議題の正本は指定ROOTの`minutes/<topic>/`配下。実運用ROOTの選定は別途固定する。
 Tier1 実証 `minutes/tier1-final/` も ignore を外して履歴に残す)。
 
 副作用として、witness 前提で保留していた判断が消える: **grok 席 A/B/C 判断は不要**
@@ -229,7 +234,9 @@ codex + cc の 2 席 (tier は spike 結果に従う。**全席 Tier3 でも合�
 4. CEO の操作が「議題・指名・(Tier3 なら貼り付け)・裁定」だけで完結する
 5. 全チャット履歴がアプリ側に残っている
 
-## 11. ロードマップ
+## 11. 当時の版別計画（履歴）
+
+現在の責務・完了条件・優先順位は[ROADMAP](ROADMAP.md)を参照する。
 
 | 版 | 内容 |
 |---|---|
