@@ -39,10 +39,13 @@ python3 -m roundtable.cli cancel TOPIC --root ROOT --invocation INVOCATION
 
 ## 休止中の担当を再開する境界
 
-このrepoには座長のCodex Desktopタスクを再開するadapterも、常設定期実行もありません。
+回収した回答を元担当のCodexタスクへ返す[followup契約](coordinator-followup.md)があります。
+稼働中のCodexが通知を固定・claimし、正式な`send_message_to_thread`の結果を記録します。
+CLI単独では停止中のCodexを起動できず、常設定期実行も提供しません。
 `collect-pending`は`follow_up.resume_executed: false`と
 `coordinator-resume-adapter-unavailable`を返します。既にmergedの回答も一覧に残すため、
-回収直後に座長が停止しても再起動後の確認候補を失いません。確認済みかの判定は座長が所有します。
+回収直後に座長が停止しても再起動後の確認候補を失いません。通知済みかはfollowup記録で照合し、
+元担当が回答を読んで作業したかは正式タスクAPIの実結果で別に確認します。
 
 定期化する場合は、製品が提供する正式なタスク定期実行機構に、対象root/topic、
 この有限コマンド、結果の照合、再開対象の正確なタスクIDを登録する判断が別途必要です。

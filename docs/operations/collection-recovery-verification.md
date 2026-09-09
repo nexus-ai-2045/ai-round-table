@@ -6,13 +6,13 @@
 ## 現在の受入状況
 
 現在の状態はこの表を正本とし、後続の日付別記録はその時点の証拠として残します。
-今回の完了条件は、Macの依頼受渡し・重複しない回答回収・元担当への返却を、
-提出コードと通常の配布環境で確認することです。候補構成の成功と正式反映は分けます。
+全体の責務・完了条件・次の順序は[ロードマップ](../ROADMAP.md)を正本とします。
+ここには実測状態と証拠を記録し、候補構成の成功と正式反映は分けます。
 
 | 対象 | 状態と次の行動 |
 |---|---|
-| 製品修正と配布CLI | PR #22をmerge済み。正式mainと固定wheelのコード一致、checkout外の起動・回収を確認 |
-| CI | WindowsのCLI出力とテスト隔離ガードを修復済み。最新HEADの両OS成功を受入条件とし、結果の正本は[PR #22のChecks](https://github.com/nexus-ai-2045/ai-round-table/pull/22/checks)とする |
+| 製品修正と配布CLI | PR #22と#21をmerge済み。PR #21反映後のmainと固定wheelの20 Pythonファイル一致、checkout外CLI起動を確認 |
+| CI | WindowsのCLI出力とテスト隔離ガードを修復済み。最新HEADの両OS成功を受入条件とし、製品修復の各PR Checksと[mainのActions](https://github.com/nexus-ai-2045/ai-round-table/actions/workflows/test.yml)で対象SHAを照合する |
 | Mac cmuxの実往復・本部返却 | 正式wrapperと通常CLIで搬送・回答1件・再回収不変・正式タスク通知の受理を確認。本部による読取・運用証拠への採用も確認 |
 | 共通基盤の正式反映 | Projects PR #725を本部がmergeし、通常rootへ限定反映済み。他担当差分の保全と正式importを確認 |
 | Claude Desktop指定席 | 操作接続障害で未検証。指定席の復旧後に1依頼・1回答を検証する |
@@ -156,3 +156,16 @@ role_hint内のパスを保持したsnapshot固定、繰り返し回収時の確
 通常の更新・切替・復旧は[Mac受渡し手順](mac-handoff.md)の正本と切替に従います。
 Claude Desktop指定席は操作接続障害のため未検証。常設の自動起動も未接続であり、
 正式cmux経路の成功だけでこれらを完了扱いしません。
+
+## 2026-09-08：PR #21の統合と通常CLI更新
+
+[PR #21](https://github.com/nexus-ai-2045/ai-round-table/pull/21)を
+`1feb44c174c8c7fe448b21ee56bf2032d7477e50`としてmainへmergeしました。
+現行mainとの統合試験は412件成功（607.60秒）、独立レビューでP1/P2指摘なし。
+採用前のPR ChecksはWindows・Ubuntuとも成功、merge後のCIはActionsで別途確認します。
+
+固定wheelのSHA256は`4cb1e4d19766a2a97772999c78c14806f6cb360aa45bd54abd1940c3a17b8456`。
+通常CLIへ再導入し、Pythonファイル20件のmainとの一致とrepo外からの起動を確認しました。
+旧v1 manifestでfan_in.testsにcluster_idsがない場合は拒否されます。
+既存manifestを使う場合は担当clusterとテスト証拠の対応を追記してください。
+今回のコード変更を、Claude Desktop実席や常設自動起動の検証済みとは扱いません。
