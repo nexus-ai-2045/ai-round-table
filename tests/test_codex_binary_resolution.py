@@ -160,7 +160,9 @@ def test_doctor_reports_too_old_without_spawning(monkeypatch, tmp_path):
     """
     from roundtable import doctor
 
-    _fake_path(monkeypatch, tmp_path, {"old": OLD})
+    from roundtable.relay_codex import _parse_version
+
+    _fake_path(monkeypatch, tmp_path, {"old": _parse_version("codex-cli 0.130.0-alpha.5")})
 
     def _must_not_spawn(*a, **kw):
         raise AssertionError("古いと分かっている codex で app-server を起動した")
@@ -176,3 +178,79 @@ def test_doctor_reports_too_old_without_spawning(monkeypatch, tmp_path):
     # 「見つからない」と混同されない (原因が別物に見えると調査が逸れる)
     assert "not found" not in report.proxy_connect
     assert "0.130.0" in report.proxy_connect
+
+
+@pytest.mark.parametrize("versions,winner", [
+    (["0.154.0-alpha.1", "0.154.0-alpha.5"], "b"),
+    (["0.154.0-alpha.5", "0.154.0-alpha.10"], "b"),
+    (["0.154.0-alpha.5", "0.154.0"], "b"),
+    (["0.154.0", "0.154.0-alpha.5"], "a"),
+    (["0.154.0+one", "0.154.0+two"], "a"),
+])
+def test_semver_order(monkeypatch, tmp_path, versions, winner):
+    from roundtable.relay_codex import _parse_version
+
+    made = _fake_path(monkeypatch, tmp_path, {
+        name: _parse_version("codex-cli " + version)
+        for name, version in zip(("a", "b"), versions)
+    })
+    assert resolve_codex_binary() == made[winner]
+
+
+@pytest.mark.parametrize("allow_fallback", [True, False])
+def test_desktop_only_old_factory_send(monkeypatch, tmp_path, allow_fallback):
+    from roundtable.relay import get_relay
+
+    _fake_path(monkeypatch, tmp_path, {})
+    _fake_desktop_app(monkeypatch, tmp_path, OLD)
+    delivered = []
+    monkeypatch.setattr("roundtable.packet.to_clipboard", delivered.append)
+
+    def forbidden_spawn(*args, **kwargs):
+        raise AssertionError("非対応版を起動した")
+
+    monkeypatch.setattr("roundtable.relay_codex.subprocess.Popen", forbidden_spawn)
+    relay = get_relay("codex", tier=1, allow_fallback=allow_fallback)
+    seat = {}
+    try:
+        if allow_fallback:
+            assert relay.send(seat, "packet").startswith("fallback-tier3:")
+            assert delivered == ["packet"]
+            assert seat["tier"] == 3
+            assert "0.130.0" in seat["fallback_reason"]
+        else:
+            with pytest.raises(UnsupportedCodexError):
+                relay.send(seat, "packet")
+            assert delivered == []
+    finally:
+        relay.close()
+
+
+def test_probes_overlap_and_ties_keep_path_order(monkeypatch, tmp_path):
+    import threading
+
+    made = _fake_path(monkeypatch, tmp_path, {"a": NEW, "b": NEW})
+    barrier = threading.Barrier(2, timeout=5)
+
+    def probe(path):
+        # 直列実装は両 probe が揃わず失敗する。実時間の速さには依存しない。
+        barrier.wait()
+        return NEW
+
+    monkeypatch.setattr("roundtable.relay_codex._probe_version", probe)
+    assert resolve_codex_binary() == made["a"]
+
+
+def test_explicit_relay_binary_bypasses_resolution_probe(monkeypatch):
+    from roundtable.relay_codex import CodexAppServerRelay
+
+    def forbidden_probe(path):
+        raise AssertionError("明示指定で probe した")
+
+    monkeypatch.setattr("roundtable.relay_codex._probe_version", forbidden_probe)
+    relay = CodexAppServerRelay(binary="C:/explicit/codex.exe")
+    try:
+        assert relay.binary == "C:/explicit/codex.exe"
+        assert relay._resolution_error is None
+    finally:
+        relay.close()
