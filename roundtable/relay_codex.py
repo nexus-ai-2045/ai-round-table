@@ -13,6 +13,9 @@ turn/start の timeout は受理済みの可能性があるため DeliveryUnknow
 from __future__ import annotations
 
 import json
+import re
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 import os
 import queue
 import subprocess
@@ -49,17 +52,44 @@ spawn するとそちらを掴む。その版の app-server は initialize に�
 """
 
 
-def _parse_version(text: str) -> tuple[int, ...]:
-    """`codex-cli 0.144.6` → (0, 144, 6)。読めなければ空 tuple。"""
+@dataclass(frozen=True)
+class _Version:
+    release: tuple[int, ...]
+    prerelease: str = ""
+
+    def __str__(self) -> str:
+        return ".".join(map(str, self.release)) + (
+            "-" + self.prerelease if self.prerelease else ""
+        )
+
+
+def _version_key(version: _Version | tuple[int, ...]) -> tuple:
+    """SemVer 順序。数値識別子は数値比較し、正式版は同番号の prerelease より後。"""
+    if isinstance(version, _Version):
+        release, pre = version.release, version.prerelease
+    else:
+        release, pre = version, ""
+    release = release + (0,) * max(0, 3 - len(release))
+    identifiers = tuple(
+        (0, int(part)) if part.isdigit() else (1, part)
+        for part in pre.split(".") if part
+    )
+    return release, not bool(pre), identifiers
+
+
+def _parse_version(text: str) -> _Version | tuple[int, ...]:
+    """Codex の版表示を読み、prerelease を保持する。build metadata は順序に影響しない。"""
     for token in text.split():
-        head = token.split("-", 1)[0]
-        parts = head.split(".")
-        if len(parts) >= 2 and all(x.isdigit() for x in parts[:2]):
-            return tuple(int(x) for x in parts if x.isdigit())
+        match = re.fullmatch(
+            r"(\d+\.\d+(?:\.\d+)?)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?"
+            r"(?:\+[0-9A-Za-z.-]+)?", token,
+        )
+        if match:
+            return _Version(tuple(map(int, match[1].split("."))), match[2] or "")
     return ()
 
 
-def _probe_version(path: str) -> tuple[int, ...]:
+def _probe_version(path: str) -> _Version | tuple[int, ...]:
     try:
         out = subprocess.run(
             [path, "--version"], capture_output=True, text=True,
@@ -71,20 +101,21 @@ def _probe_version(path: str) -> tuple[int, ...]:
 
 
 class UnsupportedCodexError(RelayError):
-    """PATH 上の codex が**全て**実測で MIN_APP_SERVER_VERSION 未満だった。
+    """codex の全候補が実測で MIN_APP_SERVER_VERSION 未満だった。
 
     RelayError を継承しているので FallbackRelay の既存 `except RelayError` が
     そのまま拾い、Tier3 へ即縮退する (分岐を足さずに済む)。
     """
 
-    def __init__(self, path: str, version: tuple[int, ...]):
+    def __init__(self, path: str, version: _Version | tuple[int, ...]):
         self.path = path
         self.version = version
-        shown = ".".join(str(x) for x in version) or "unknown"
+        shown = str(version) if isinstance(version, _Version) else ".".join(map(str, version)) or "unknown"
+        self.version_text = shown
         need = ".".join(str(x) for x in MIN_APP_SERVER_VERSION)
         super().__init__(
             f"codex {shown} < {need} (app-server が thread/start に応答しない版): "
-            f"{path}. PATH 上に他の候補も無いので Tier1 は成立しない"
+            f"{path}. 対応する候補が無いので Tier1 は成立しない"
         )
 
 
@@ -111,7 +142,15 @@ def resolve_codex_binary(preferred: str | None = None) -> str:
 
     素の "codex" を信じない: PATH 先頭が古い版だと thread/start が無応答になり、
     Tier1 が「遅い」ではなく「絶対に届かない」状態になる (実測)。
-    PATH 上の候補を全部見て、MIN_APP_SERVER_VERSION 以上の最初の 1 本を返す。
+    全候補を調べ、MIN_APP_SERVER_VERSION 以上の最新版を返す。
+
+    候補は PATH に加えて **Desktop アプリ同梱の codex** (`%LOCALAPPDATA%/OpenAI/Codex/
+    bin/<hash>/codex.exe`、PATH には載らない) も見る。対応版が複数あれば **最も新しい
+    版** を選ぶ。PATH 順で最初の対応版を返すと、`~/.codex` の state を最新版が書き換えた
+    後に古い対応版が読めなくなる: 2026-09-09 に Desktop 側 0.154 が legacy→paginated
+    移行を走らせ、PATH 先頭の 0.144.6 では `thread/resume` が
+    `-32601 paginated_threads is not supported yet` で落ちた (2026-09-12 実測。
+    0.154 では同じ thread が resume できた)。state の所有者 = 最新版なので版で選ぶ。
 
     候補が全部「実測で下回っていた」場合は **UnsupportedCodexError を即上げる**。
     以前は最も新しい古版を返していたが、それだと呼び出し側は
@@ -127,31 +166,56 @@ def resolve_codex_binary(preferred: str | None = None) -> str:
         return preferred
     candidates: list[str] = []
     seen: set[str] = set()
-    for directory in (os.environ.get("PATH") or "").split(os.pathsep):
-        if not directory:
-            continue
+    for directory in _candidate_dirs():
         for name in ("codex.cmd", "codex.exe", "codex"):
             cand = os.path.join(directory, name)
             if cand in seen or not os.path.isfile(cand):
                 continue
             seen.add(cand)
             candidates.append(cand)
-    newest_old: tuple[tuple[int, ...], str] | None = None
+    newest_ok: tuple[_Version | tuple[int, ...], str] | None = None
+    newest_old: tuple[_Version | tuple[int, ...], str] | None = None
     unknown: str | None = None
-    for cand in candidates:
-        ver = _probe_version(cand)
-        if ver >= MIN_APP_SERVER_VERSION:
-            return cand
-        if ver:
-            if newest_old is None or ver > newest_old[0]:
+    # probe は互いに独立。順序を保つ map で同版時の PATH 優先を維持する。
+    # 同時実行を 8 本に制限し、遅い候補ごとの 30 秒直列待ちを避ける。
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        versions = list(executor.map(_probe_version, candidates))
+    for cand, ver in zip(candidates, versions):
+        if ver and _version_key(ver) >= _version_key(MIN_APP_SERVER_VERSION):
+            # 同版なら先に見つけた方 (PATH 優先) を保つため > で比較する
+            if newest_ok is None or _version_key(ver) > _version_key(newest_ok[0]):
+                newest_ok = (ver, cand)
+        elif ver:
+            if newest_old is None or _version_key(ver) > _version_key(newest_old[0]):
                 newest_old = (ver, cand)
         elif unknown is None:
             unknown = cand
+    if newest_ok:
+        return newest_ok[1]
     if unknown:
         return unknown
     if newest_old:
         raise UnsupportedCodexError(newest_old[1], newest_old[0])
     return "codex"  # 候補ゼロ。spawn 時に OSError で速く落ちる
+
+
+def _candidate_dirs() -> list[str]:
+    """codex を探すディレクトリ。PATH の後ろに Desktop アプリの bin (hash 配下) を足す。
+
+    hash ディレクトリ名は更新ごとに変わるので glob で拾う。`%LOCALAPPDATA%` が無い
+    環境 (CI の Linux など) では PATH だけになる。
+    """
+    dirs = [d for d in (os.environ.get("PATH") or "").split(os.pathsep) if d]
+    local = os.environ.get("LOCALAPPDATA")
+    if local:
+        app_bin = os.path.join(local, "OpenAI", "Codex", "bin")
+        try:
+            entries = sorted(os.listdir(app_bin))
+        except OSError:
+            entries = []
+        dirs.append(app_bin)
+        dirs.extend(os.path.join(app_bin, e) for e in entries)
+    return dirs
 
 
 # プロセスツリー回収は Grok 席と共通 (roundtable/relay_process.py へ移設)。
@@ -166,7 +230,13 @@ class CodexAppServerRelay:
     def __init__(self, binary: str | None = None, cwd: str | None = None):
         # 素の "codex" は PATH 先頭の古い版を掴みうる (thread/start 無応答) ため、
         # 版を見て選ぶ。明示指定があればそれを尊重する。
-        self.binary = resolve_codex_binary(binary)
+        self._resolution_error: UnsupportedCodexError | None = None
+        try:
+            self.binary = resolve_codex_binary(binary)
+        except UnsupportedCodexError as exc:
+            # 未送信エラーは send 内で上げ、FallbackRelay の記録と縮退を通す。
+            self.binary = "codex"
+            self._resolution_error = exc
         self.cwd = cwd
         self._proc: subprocess.Popen[str] | None = None
         self._q: queue.Queue[dict] = queue.Queue()
@@ -185,6 +255,8 @@ class CodexAppServerRelay:
         return self._id
 
     def _ensure(self) -> None:
+        if self._resolution_error is not None:
+            raise self._resolution_error
         if self._proc and self._proc.poll() is None:
             return
         self._tree = _ProcessTree()

@@ -168,7 +168,7 @@ def run_doctor(
     sock = default_control_socket()
     sock_exists = sock.exists()
     if unsupported:
-        proxy = f"error:unsupported codex {'.'.join(str(x) for x in unsupported.version)}"
+        proxy = f"error:unsupported codex {unsupported.version_text}"
     elif path:
         proxy = _probe_proxy(path, sock)
     else:
