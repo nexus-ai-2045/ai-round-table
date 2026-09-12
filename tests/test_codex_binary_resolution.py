@@ -9,6 +9,14 @@
 - **版が読めない候補は落とさない**。`--version` の出力形式が変わっただけの
   可能性があり、古いという積極的な証拠が無い。
 - 例外は RelayError の系統。FallbackRelay の既存 except がそのまま拾う。
+- **対応版が複数あるなら最も新しい版を選ぶ** (PATH 順ではない)。`~/.codex` の
+  state / 履歴形式は最新の codex (Desktop アプリ同梱) が書き換える。2026-09-09 に
+  legacy→paginated 移行が走り、PATH 先頭の 0.144.6 では `thread/resume` が
+  `-32601 paginated_threads is not supported yet` で落ちた (2026-09-12 実測)。
+  0.154 では同じ thread が resume できた。古い対応版を掴む余地を残さない。
+- **Desktop アプリ同梱の codex も候補に入れる**。PATH に載らない hash ディレクトリ
+  (`%LOCALAPPDATA%/OpenAI/Codex/bin/<hash>/codex.exe`) にあり、
+  ここが state の所有者なので PATH だけ見ると常に古い方を選ぶ。
 """
 import os
 
@@ -23,6 +31,7 @@ from roundtable.relay_codex import (
 
 OLD = (0, 130, 0)
 NEW = (MIN_APP_SERVER_VERSION[0], MIN_APP_SERVER_VERSION[1] + 1, 0)
+NEWER = (MIN_APP_SERVER_VERSION[0], MIN_APP_SERVER_VERSION[1] + 10, 0)
 
 
 def _fake_path(monkeypatch, tmp_path, layout: dict[str, tuple[int, ...]]) -> dict[str, str]:
@@ -45,11 +54,33 @@ def _fake_path(monkeypatch, tmp_path, layout: dict[str, tuple[int, ...]]) -> dic
         made[name] = str(binary)
         dirs.append(str(d))
     monkeypatch.setenv("PATH", os.pathsep.join(dirs))
+    # Desktop アプリの bin も tmp 配下に向け、実機の候補が混ざらないようにする
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
     versions = {p: layout[n] for n, p in made.items()}
     monkeypatch.setattr(
         "roundtable.relay_codex._probe_version", lambda p: versions.get(p, ())
     )
     return made
+
+
+def _fake_desktop_app(monkeypatch, tmp_path, version: tuple[int, ...]) -> str:
+    """`%LOCALAPPDATA%/OpenAI/Codex/bin/<hash>/codex.exe` を tmp に作る。
+
+    _fake_path の後に呼ぶこと (版表を上書きで足す)。hash 名は更新ごとに変わるので
+    固定値に依存しない形で探せているかを見る。
+    """
+    d = tmp_path / "localappdata" / "OpenAI" / "Codex" / "bin" / "deadbeef01234567"
+    d.mkdir(parents=True)
+    binary = d / "codex.exe"
+    binary.write_text("", encoding="utf-8")
+    from roundtable import relay_codex
+
+    prev = relay_codex._probe_version
+    monkeypatch.setattr(
+        "roundtable.relay_codex._probe_version",
+        lambda p: version if p == str(binary) else prev(p),
+    )
+    return str(binary)
 
 
 def test_all_candidates_old_raises_instead_of_returning(monkeypatch, tmp_path):
@@ -74,6 +105,30 @@ def test_supported_wins_over_old_regardless_of_path_order(monkeypatch, tmp_path)
     assert resolve_codex_binary() == made["new"]
 
 
+def test_newest_supported_wins_regardless_of_path_order(monkeypatch, tmp_path):
+    """対応版が 2 本なら PATH 先頭ではなく新しい方。
+
+    2026-09-12 実測: PATH 先頭の 0.144.6 は state 移行後の thread を resume できず、
+    hash 配下の 0.154 はできた。「最低版を超えた最初の 1 本」では再発する。
+    """
+    made = _fake_path(monkeypatch, tmp_path, {"new": NEW, "newer": NEWER})
+    assert resolve_codex_binary() == made["newer"]
+
+
+def test_desktop_app_binary_is_a_candidate(monkeypatch, tmp_path):
+    """PATH に無い Desktop アプリ同梱 codex を候補に入れ、最新ならそれを選ぶ。"""
+    _fake_path(monkeypatch, tmp_path, {"new": NEW})
+    desktop = _fake_desktop_app(monkeypatch, tmp_path, NEWER)
+    assert resolve_codex_binary() == desktop
+
+
+def test_desktop_app_binary_does_not_win_when_older(monkeypatch, tmp_path):
+    """Desktop 同梱が古ければ PATH 側の新しい方 (場所ではなく版で決める)。"""
+    made = _fake_path(monkeypatch, tmp_path, {"newer": NEWER})
+    _fake_desktop_app(monkeypatch, tmp_path, NEW)
+    assert resolve_codex_binary() == made["newer"]
+
+
 def test_unreadable_version_is_not_rejected(monkeypatch, tmp_path):
     """版が読めない候補は「古い」証拠が無い。落とさず試させる。"""
     made = _fake_path(monkeypatch, tmp_path, {"old": OLD, "mystery": ()})
@@ -83,6 +138,7 @@ def test_unreadable_version_is_not_rejected(monkeypatch, tmp_path):
 def test_no_candidates_does_not_raise(monkeypatch, tmp_path):
     """候補ゼロは非互換ではない。spawn 時の OSError に任せる。"""
     monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "empty"))  # Desktop 同梱も無し
     monkeypatch.setattr("roundtable.relay_codex._probe_version", lambda p: ())
     assert resolve_codex_binary() == "codex"
 

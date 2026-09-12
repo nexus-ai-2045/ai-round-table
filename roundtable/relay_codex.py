@@ -113,6 +113,14 @@ def resolve_codex_binary(preferred: str | None = None) -> str:
     Tier1 が「遅い」ではなく「絶対に届かない」状態になる (実測)。
     PATH 上の候補を全部見て、MIN_APP_SERVER_VERSION 以上の最初の 1 本を返す。
 
+    候補は PATH に加えて **Desktop アプリ同梱の codex** (`%LOCALAPPDATA%/OpenAI/Codex/
+    bin/<hash>/codex.exe`、PATH には載らない) も見る。対応版が複数あれば **最も新しい
+    版** を選ぶ。PATH 順で最初の対応版を返すと、`~/.codex` の state を最新版が書き換えた
+    後に古い対応版が読めなくなる: 2026-09-09 に Desktop 側 0.154 が legacy→paginated
+    移行を走らせ、PATH 先頭の 0.144.6 では `thread/resume` が
+    `-32601 paginated_threads is not supported yet` で落ちた (2026-09-12 実測。
+    0.154 では同じ thread が resume できた)。state の所有者 = 最新版なので版で選ぶ。
+
     候補が全部「実測で下回っていた」場合は **UnsupportedCodexError を即上げる**。
     以前は最も新しい古版を返していたが、それだと呼び出し側は
     initialize に成功したあと thread/start の 300s 枠を丸ごと待ってから縮退し、
@@ -127,31 +135,53 @@ def resolve_codex_binary(preferred: str | None = None) -> str:
         return preferred
     candidates: list[str] = []
     seen: set[str] = set()
-    for directory in (os.environ.get("PATH") or "").split(os.pathsep):
-        if not directory:
-            continue
+    for directory in _candidate_dirs():
         for name in ("codex.cmd", "codex.exe", "codex"):
             cand = os.path.join(directory, name)
             if cand in seen or not os.path.isfile(cand):
                 continue
             seen.add(cand)
             candidates.append(cand)
+    newest_ok: tuple[tuple[int, ...], str] | None = None
     newest_old: tuple[tuple[int, ...], str] | None = None
     unknown: str | None = None
     for cand in candidates:
         ver = _probe_version(cand)
         if ver >= MIN_APP_SERVER_VERSION:
-            return cand
-        if ver:
+            # 同版なら先に見つけた方 (PATH 優先) を保つため > で比較する
+            if newest_ok is None or ver > newest_ok[0]:
+                newest_ok = (ver, cand)
+        elif ver:
             if newest_old is None or ver > newest_old[0]:
                 newest_old = (ver, cand)
         elif unknown is None:
             unknown = cand
+    if newest_ok:
+        return newest_ok[1]
     if unknown:
         return unknown
     if newest_old:
         raise UnsupportedCodexError(newest_old[1], newest_old[0])
     return "codex"  # 候補ゼロ。spawn 時に OSError で速く落ちる
+
+
+def _candidate_dirs() -> list[str]:
+    """codex を探すディレクトリ。PATH の後ろに Desktop アプリの bin (hash 配下) を足す。
+
+    hash ディレクトリ名は更新ごとに変わるので glob で拾う。`%LOCALAPPDATA%` が無い
+    環境 (CI の Linux など) では PATH だけになる。
+    """
+    dirs = [d for d in (os.environ.get("PATH") or "").split(os.pathsep) if d]
+    local = os.environ.get("LOCALAPPDATA")
+    if local:
+        app_bin = os.path.join(local, "OpenAI", "Codex", "bin")
+        try:
+            entries = sorted(os.listdir(app_bin))
+        except OSError:
+            entries = []
+        dirs.append(app_bin)
+        dirs.extend(os.path.join(app_bin, e) for e in entries)
+    return dirs
 
 
 # プロセスツリー回収は Grok 席と共通 (roundtable/relay_process.py へ移設)。

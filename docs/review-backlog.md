@@ -670,3 +670,10 @@ stdout/stderrをUTF-8へ設定し、console scriptと`python -m`の両入口を�
 Windowsのテスト隔離ガードは、末尾slashの照合がgitignoreの空行に一致扱いとなる経路をCI診断で特定した。
 生成予定の子ファイルでignoreを検査する方式へ修復し、CRLFの独立git repoでも許可・拒否を確認した。
 パス別名という仮説の追加コードは実測に合わないため除去した。ガードを本試験より先にCIで検査する。
+
+## 2026-09-12 実測: codex 版ズレと turn 失敗の不可視 (fix/codex-binary-newest)
+
+| # | 重さ | 指摘 | 扱い |
+|---|---|---|---|
+| H-0912-1 | HIGH | `resolve_codex_binary` が「最低版以上の PATH 上の最初の 1 本」を返すため、Desktop アプリ同梱の codex 0.154 が 09-09 に `~/.codex` を legacy→paginated 移行した後、PATH 先頭の 0.144.6 では `thread/resume` が `-32601 paginated_threads is not supported yet` で落ちた (存在しない id は `-32600 no rollout found` なので「見つかった後に読めない」失敗)。0.154 で同じ thread は resume できた (対照実験 4 本) | **done** (本 PR)。候補に `%LOCALAPPDATA%/OpenAI/Codex/bin/<hash>/` を足し、対応版のうち最新を選ぶ。state の所有者は常に最新版 |
+| M-0912-1 | MED | L4 の同型・実測版。席の turn が `usageLimitExceeded` で 86s で失敗したが、relay は turn/start 後に切断するので dispatcher は 600s 待って `failed: timeout` と記録した。失敗理由は `~/.codex/thread_history_1.sqlite` の `thread_turns.error_json` にしか無い | **hold**。案: `send` 後も turn/completed (error 付き) を待ち `_write_last_result` に生値を載せる (L4 と同じ修正面)。Codex 内部 DB への依存は取らない |
