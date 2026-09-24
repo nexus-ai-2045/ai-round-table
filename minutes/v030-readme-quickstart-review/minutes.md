@@ -1,0 +1,39 @@
+---
+topic: v0.3.0 の README「使い方（できること）」節を初見ユーザーとして読み、詰まる点・誤解する点を挙げる
+status: closed
+round: 3
+participants: [codex]
+verdict: Round 2 実席スモーク失敗。Codex席が指定snapshotを観測できず、README Quickstart の内容レビューは未完了。承認・却下は判断せず、このsmokeの結果としてclose。
+---
+
+# v0.3.0 の README「使い方（できること）」節を初見ユーザーとして読み、詰まる点・誤解する点を挙げる
+
+## 背景
+対象は本 repo の README.md「使い方（できること）」節 (doctor / new-topic / dispatch / status / close の 5 コマンド) と、その直後の「KPI は人間の操作 3 回以内」の説明。初めてこの repo を見た開発者の立場で、(1) 実行前に分からないこと (2) 実行して詰まりそうなこと (3) 説明と実挙動がずれていそうな箇所 を挙げてほしい。根拠は README の該当行か、可能なら roundtable/cli.py の該当箇所を示すこと。改善案は不要、指摘だけでよい。これは v0.3.0 の実席 smoke でもあるので、回答形式は roundtable の JSON envelope に従うこと。
+
+## Round 1
+
+### codex (invocation: 5f0c41c243ad)
+
+\## 判断保留（fail closed）
+
+この実行では `minutes.snapshot.md` の内容を取得できなかったため、README Quickstart の妥当性について推測で賛否を出すべきではありません。スナップショットを実際に読める状態で再実行し、少なくとも初見利用者が記載手順だけで前提条件の確認、導入、最小実行、成功判定、失敗時の復旧先まで辿れるかを確認してから採否を決めるべきです。現時点の結論は「承認ではなく、入力未観測によるレビュー未完了」です。
+
+| claim | evidence_type | evidence |
+|---|---|---|
+| スナップショット未観測の状態では、README Quickstart の承認判断を行う十分な根拠がない。 | log | 本線で Get-Content、Get-ChildItem、ReadAllText、cmd type を試したが、いずれも exit 0 にもかかわらず stdout/stderr が空だった。独立 read-only lane でも同じ空出力が再現し、ファイル内容を取得できなかった。 |
+| 再レビューでは、Quickstart の自己完結性と検証可能な成功条件を主要ゲートにすべきである。 | argument | Quickstart は初見利用者の実行経路なので、前提条件、コマンド、期待結果、失敗時の導線のいずれかが欠けると、手順が正しいか利用者自身で判定できないため。 |
+
+## Round 2
+
+### codex (invocation: 7b66557f1f07)
+<!-- roundtable-response-sha256: dbe6f1265181eada8fe321ffa6ab1754386e0dc92958600261dfdd37d805bed4 -->
+
+\## 判断保留（fail closed）
+
+この実行では `requests/7b66557f1f07.snapshot.md` の内容を取得できなかったため、README Quickstart の妥当性について推測で賛否を示すべきではありません。スナップショットを読める実行環境で再レビューし、初見利用者が記載された前提条件、導入、最小実行、成功判定、失敗時の復旧先を一貫して辿れるかを確認してから採否を決めるべきです。現時点の結論は承認ではなく、入力未観測によるレビュー未完了です。
+
+| claim | evidence_type | evidence |
+|---|---|---|
+| スナップショット未観測の状態では、README Quickstart を承認または却下する十分な根拠がない。 | log | 本線の Get-Content は完了まで内容を返さず、独立 read-only lane の PowerShell Get-Content と cmd.exe type も30秒超にわたり無出力で停止したため、対象本文を取得できなかった。 |
+| 再レビューでは、Quickstart の自己完結性と検証可能な成功条件を主要ゲートにすべきである。 | argument | 前提条件、実行コマンド、期待結果、失敗時の導線のいずれかが欠けると、初見利用者は手順の成否を自力で判定できないため。 |
