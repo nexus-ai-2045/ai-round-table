@@ -1,37 +1,44 @@
 {
-  "purpose": "Restore and verify the absolute Windows worktree that <smoke-worktree> replaced in captured request packets.",
+  "purpose": "捕捉したリクエスト包の <smoke-worktree> を、トピック内の相対パスへ対応づける。個人の絶対パスは追跡ファイルに残さない。",
   "placeholder": "<smoke-worktree>",
-  "absolute_worktree": "C:\\Users\\yas\\Projects\\Documents\\.repos\\nexus_ai\\ai-round-table",
-  "path_style": "Windows Path.resolve() (backslash separators)",
-  "generation_rule": "roundtable.packet.build → (TopicPaths scratch/snapshot).resolve(); handoff._capture_request freezes snapshot under requests/<inv>.snapshot.md",
+  "path_style": "展開時は Windows の Path.resolve()（バックスラッシュ区切り）",
+  "generation_rule": "roundtable.packet.build → (TopicPaths の scratch/snapshot).resolve()。handoff._capture_request が requests/<inv>.snapshot.md に固定する。",
   "provenance": {
-    "windows_user_layout": "Historical personal_path_scan originals used C:\\Users\\yas\\Projects\\Documents\\.repos\\nexus_ai\\... (see git history before e4c5f88).",
-    "repo_name": "Public repo sync path convention: docs/operations/mac-handoff.md → $HOME/Projects/Documents/.repos/nexus_ai/ai-round-table (Windows: same under C:\\Users\\yas).",
-    "note": "Commit 0e18b51 recorded packets with <smoke-worktree> redaction; this mapping un-redacts that token to the smoke --root / git worktree absolute path."
+    "windows_user_layout": "過去の personal_path_scan 原典は Windows ユーザ配下の Projects/Documents/.repos/nexus_ai/... だった（e4c5f88 より前の履歴を参照）。",
+    "repo_name": "公開同期の慣習: docs/operations/mac-handoff.md → $HOME/Projects/Documents/.repos/nexus_ai/ai-round-table。",
+    "note": "0e18b51 は <smoke-worktree> で記録。a189e6a は調査のため絶対パスを一時復元。本ファイルはプレースホルダと相対サフィックスだけを残し、personal_path_scan を汚さない。"
   },
   "packets": {
     "7b66557f1f07.md": {
       "redacted_sha256": "33a45e1bb588933cfc45d17787cec1d50ce3ceb8d8fe51378d568de9c956d61b",
-      "restored_sha256": "e2a3313cdaa60711361c6d042392d7d4d1fe6273205a397f5129685c59a2d41c",
-      "absolute_paths": {
-        "snapshot": "C:\\Users\\yas\\Projects\\Documents\\.repos\\nexus_ai\\ai-round-table\\minutes\\v030-readme-quickstart-review\\requests\\7b66557f1f07.snapshot.md",
-        "scratch_tmp": "C:\\Users\\yas\\Projects\\Documents\\.repos\\nexus_ai\\ai-round-table\\minutes\\v030-readme-quickstart-review\\scratch\\7b66557f1f07.json.tmp",
-        "scratch": "C:\\Users\\yas\\Projects\\Documents\\.repos\\nexus_ai\\ai-round-table\\minutes\\v030-readme-quickstart-review\\scratch\\7b66557f1f07.json"
+      "placeholder_paths": {
+        "snapshot": "<smoke-worktree>\\minutes\\v030-readme-quickstart-review\\requests\\7b66557f1f07.snapshot.md",
+        "scratch_tmp": "<smoke-worktree>\\minutes\\v030-readme-quickstart-review\\scratch\\7b66557f1f07.json.tmp",
+        "scratch": "<smoke-worktree>\\minutes\\v030-readme-quickstart-review\\scratch\\7b66557f1f07.json"
+      },
+      "relative_suffixes": {
+        "snapshot": "minutes/v030-readme-quickstart-review/requests/7b66557f1f07.snapshot.md",
+        "scratch_tmp": "minutes/v030-readme-quickstart-review/scratch/7b66557f1f07.json.tmp",
+        "scratch": "minutes/v030-readme-quickstart-review/scratch/7b66557f1f07.json"
       }
     },
     "99618816e8a2.md": {
       "redacted_sha256": "2328d2a38e21068f789d756ef5926462794bb3739ebd75373203a8cfabd3bbc8",
-      "restored_sha256": "b0b1b79ecd22667b58574b7d648d10f95cb9da6896ddd76ab776273fedbf0901",
-      "absolute_paths": {
-        "snapshot": "C:\\Users\\yas\\Projects\\Documents\\.repos\\nexus_ai\\ai-round-table\\minutes\\v030-readme-quickstart-review\\requests\\99618816e8a2.snapshot.md",
-        "scratch_tmp": "C:\\Users\\yas\\Projects\\Documents\\.repos\\nexus_ai\\ai-round-table\\minutes\\v030-readme-quickstart-review\\scratch\\99618816e8a2.json.tmp",
-        "scratch": "C:\\Users\\yas\\Projects\\Documents\\.repos\\nexus_ai\\ai-round-table\\minutes\\v030-readme-quickstart-review\\scratch\\99618816e8a2.json"
+      "placeholder_paths": {
+        "snapshot": "<smoke-worktree>\\minutes\\v030-readme-quickstart-review\\requests\\99618816e8a2.snapshot.md",
+        "scratch_tmp": "<smoke-worktree>\\minutes\\v030-readme-quickstart-review\\scratch\\99618816e8a2.json.tmp",
+        "scratch": "<smoke-worktree>\\minutes\\v030-readme-quickstart-review\\scratch\\99618816e8a2.json"
+      },
+      "relative_suffixes": {
+        "snapshot": "minutes/v030-readme-quickstart-review/requests/99618816e8a2.snapshot.md",
+        "scratch_tmp": "minutes/v030-readme-quickstart-review/scratch/99618816e8a2.json.tmp",
+        "scratch": "minutes/v030-readme-quickstart-review/scratch/99618816e8a2.json"
       }
     }
   },
   "verification": [
-    "Replace every '<smoke-worktree>' in the redacted packet text with absolute_worktree; SHA-256 of the result must equal packets.*.restored_sha256.",
-    "Relative suffixes under absolute_worktree must match files tracked in this topic (requests/*.snapshot.md) and the scratch contract paths.",
-    "Current request/*.md bodies must equal the restored text (token removed; absolute paths present)."
+    "追跡中の requests/*.md 本文の SHA-256 が packets.*.redacted_sha256 と一致すること。",
+    "本文中の絶対パス相当はプレースホルダ <smoke-worktree> のみで、ユーザプロファイルパスを含まないこと。",
+    "相対サフィックスは本トピックの追跡ファイル（requests/*.snapshot.md）と scratch 契約パスと一致すること。"
   ]
 }

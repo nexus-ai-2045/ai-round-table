@@ -8,3 +8,5 @@ __pycache__/
 minutes/*/scratch/
 minutes/*/snapshot/
 minutes/*/last-result.json
+.tools/
+*.egg-info/
