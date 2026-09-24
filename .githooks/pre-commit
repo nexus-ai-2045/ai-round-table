@@ -16,19 +16,6 @@ if [ "${AI_RATCHET_GATE_SKIP:-}" = "1" ]; then
     exit 0
 fi
 
-# --- ゲート本体の解決 -------------------------------------------------------
-# 絶対パスをここに焼かない (個人パスが tracked file に入ると preflight の
-# personal_path_scan に引っかかる)。環境変数 -> 隣接 clone の慣習位置。
-GATE="${AI_RATCHET_GATE:-}"
-if [ -z "$GATE" ]; then
-    for candidate in \
-        "$REPO_ROOT/../ai-ratchet-gate/ai_ratchet_gate.py" \
-        "$REPO_ROOT/../../ai-ratchet-gate/ai_ratchet_gate.py"
-    do
-        if [ -f "$candidate" ]; then GATE="$candidate"; break; fi
-    done
-fi
-
 # --- python の解決 ----------------------------------------------------------
 # Windows の `python` は Microsoft Store の stub に解決されることがある
 # (起動するとストアが開くだけで何も実行しない)。実際に動く 1 本を選ぶ。
@@ -43,18 +30,46 @@ for candidate in "${PYTHON:-}" python3 python py; do
     fi
 done
 
+# --- ゲート本体の解決 -------------------------------------------------------
+# 優先: requirements-tools.txt で入れた `python -m ai_ratchet_gate`（正本 wheel）。
+# 次点: AI_RATCHET_GATE または隣接 clone（絶対パスをここに焼かない）。
+GATE_MODE=""
+GATE=""
+if [ -n "$PY" ] && $PY -c "import ai_ratchet_gate" >/dev/null 2>&1; then
+    GATE_MODE="module"
+elif [ -n "${AI_RATCHET_GATE:-}" ] && [ -f "${AI_RATCHET_GATE}" ]; then
+    GATE_MODE="script"
+    GATE="$AI_RATCHET_GATE"
+else
+    for candidate in \
+        "$REPO_ROOT/../ai-ratchet-gate/ai_ratchet_gate.py" \
+        "$REPO_ROOT/../../ai-ratchet-gate/ai_ratchet_gate.py"
+    do
+        if [ -f "$candidate" ]; then
+            GATE_MODE="script"
+            GATE="$candidate"
+            break
+        fi
+    done
+fi
+
 # --- 環境が整っていない場合 -------------------------------------------------
 # ここは fail-OPEN にする。ゲートが見つからないのは「矛盾が増えた」証拠ではなく
 # **この環境にツールが無いだけ**で、それで他セッションの commit まで止めるのは
-# 巻き添えが大きすぎる。素通りしたことを目立つ形で残し、関所の網羅は CI 側に委ねる。
-if [ -z "$GATE" ] || [ ! -f "$GATE" ] || [ -z "$PY" ]; then
+# 巻き添えが大きすぎる。素通りしたことを目立つ形で残し、関所の網羅は
+# workflow_dispatch の repository-guarantees / 手元同等確認に委ねる。
+if [ -z "$GATE_MODE" ] || [ -z "$PY" ]; then
     echo "WARN [pre-commit]: ai-ratchet-gate を実行できませんでした (commit は通します)" >&2
-    [ -z "$GATE" ] || [ ! -f "$GATE" ] && \
-        echo "  ゲート本体が見つかりません。AI_RATCHET_GATE に ai_ratchet_gate.py を指定してください。" >&2
+    [ -z "$GATE_MODE" ] && \
+        echo "  ゲート本体が見つかりません。pip install --require-hashes -r requirements-tools.txt を実行するか、AI_RATCHET_GATE に ai_ratchet_gate.py を指定してください。" >&2
     [ -z "$PY" ] && \
         echo "  動作する python が見つかりません。PYTHON に実行ファイルを指定してください。" >&2
     exit 0
 fi
 
 # --- 本検査。ここから先の deny は「矛盾が増えた」という実測に基づく ---------
-$PY "$GATE" --repo "$REPO_ROOT" || exit 1
+if [ "$GATE_MODE" = "module" ]; then
+    $PY -m ai_ratchet_gate --repo "$REPO_ROOT" || exit 1
+else
+    $PY "$GATE" --repo "$REPO_ROOT" || exit 1
+fi
