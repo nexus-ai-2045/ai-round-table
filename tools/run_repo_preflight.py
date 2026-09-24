@@ -111,8 +111,12 @@ def _parse_json_report(stdout: str) -> dict:
 def ensure_checkout(cache: Path) -> None:
     cache.parent.mkdir(parents=True, exist_ok=True)
     if (cache / "scripts" / "readiness_scan.py").is_file():
-        subprocess.run(["git", "-C", str(cache), "fetch", "--depth", "1", "origin"], check=False)
-        subprocess.run(["git", "-C", str(cache), "checkout", "FETCH_HEAD"], check=False)
+        # Only refresh when cache is its own git clone. A script-only stub (tests)
+        # or a plain directory under this repo would make `git -C` walk up to the
+        # parent worktree and `checkout FETCH_HEAD` there (实测: pytest basetemp).
+        if (cache / ".git").exists():
+            subprocess.run(["git", "-C", str(cache), "fetch", "--depth", "1", "origin"], check=False)
+            subprocess.run(["git", "-C", str(cache), "checkout", "FETCH_HEAD"], check=False)
         return
     subprocess.run(["git", "clone", "--depth", "1", UPSTREAM, str(cache)], check=True)
 
