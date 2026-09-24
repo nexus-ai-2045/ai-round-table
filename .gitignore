@@ -2,9 +2,12 @@
 __pycache__/
 .pytest_cache/
 .locks/
+.tools/
 
 # 議事録ディレクトリのランタイム生成物 (commit なしの atomic_write で毎回上書きされる。
 # 追跡すると恒久 dirty になり、D12 の裁定材料である git status 証跡がノイズで汚れる)
 minutes/*/scratch/
 minutes/*/snapshot/
 minutes/*/last-result.json
+*.egg-info/
+.venv/
