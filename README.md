@@ -2,9 +2,46 @@
 
 **人間が座長を務める、マルチ AI 円卓のディスパッチャ。**
 
+[![CI](https://github.com/nexus-ai-2045/ai-round-table/actions/workflows/test.yml/badge.svg)](https://github.com/nexus-ai-2045/ai-round-table/actions/workflows/test.yml)
+[![version](https://img.shields.io/badge/version-0.3.0-blue)](https://github.com/nexus-ai-2045/ai-round-table)
+[![Python](https://img.shields.io/badge/python-3.13%2B-blue)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 - **人間が座長**。裁定・打ち切り・指名は人間だけが宣言する。自動で結論を出さない
 - **API キー不要**。席は各 AI アプリの実チャットで、普段の課金のまま動く
 - **議事録が成果物**。git 管理された 1 枚の Markdown が唯一の共有状態
+
+**現状:** CMUX 往復可 / Claude Desktop 指定席は未確認 / 常設の自動再開は未接続。詳細は[検証記録](docs/operations/collection-recovery-verification.md)と[ロードマップ](docs/ROADMAP.md)。
+
+## クイックスタート
+
+```bash
+# 導入（推奨）。ソース変更後は再インストール。開発中だけ --editable を付ける
+uv tool install /absolute/path/to/ai-round-table
+# 代替: python -m pip install .  →  python -m roundtable.cli …
+# 登録後はリポジトリ外から ai-roundtable --help
+
+# 0. 環境診断（Tier1 が使えるか）
+ai-roundtable doctor
+
+# 1. 議題を立てる                                   ← 人間の操作 1
+ai-roundtable new-topic <slug> \
+  --topic "議論したいこと" --participants codex,grok --root <root>
+
+# 2. 席へ配る（--tier 1 で席のチャットへ直接届く。   ← 人間の操作 2
+#    省略時の既定は Tier3 = クリップボード経由で人間が貼付）
+ai-roundtable dispatch <slug> --participant codex --tier 1 --root <root>
+
+# 3. 状況を見る（観測専用。手数に数えない）
+ai-roundtable status <slug> --root <root>
+
+# 4. 裁定して閉じる                                  ← 人間の操作 3
+ai-roundtable close <slug> --verdict "結論" --root <root>
+```
+
+**KPI は「人間の操作 3 回以内」**（`new-topic` / `dispatch` / `close`）。`status` は観測専用で手数に入らない。
+
+Mac の handoff / handoff-status / followup / collect などは [Macの席への受渡し](docs/operations/mac-handoff.md) を参照。回収後に元担当へ結果を戻す手順は [担当への返却](docs/operations/coordinator-followup.md)。
 
 ## 目的と仕組み
 
@@ -37,37 +74,6 @@
 経緯は [docs/review-backlog.md](docs/review-backlog.md) に残した）
 
 **dispatcher は AI を実行しない。** 議題 packet を配って議事録を束ねるだけの決定的なツール。
-
-## 使い方（できること）
-
-Macでは `uv tool install /absolute/path/to/ai-round-table` で
-`ai-roundtable` コマンドを登録できます。作業ディレクトリへの参照を残さず導入するため、
-導入後にソースを変更した場合は再インストールします。開発中に変更を即時反映したい場合だけ
-`--editable` を追加します。登録後はリポジトリ外から
-`ai-roundtable --help` を使えます。以下の `python -m roundtable.cli` と同じ入口です。
-回収後に元担当へ結果を戻す手順は [担当への返却](docs/operations/coordinator-followup.md) を参照してください。
-
-```bash
-# 0. 環境診断（Tier1 が使えるか）
-python -m roundtable.cli doctor
-
-# 1. 議題を立てる                                   ← 人間の操作 1
-python -m roundtable.cli new-topic <slug> \
-  --topic "議論したいこと" --participants codex,grok --root <root>
-
-# 2. 席へ配る（--tier 1 で席のチャットへ直接届く。   ← 人間の操作 2
-#    省略時の既定は Tier3 = クリップボード経由で人間が貼付）
-python -m roundtable.cli dispatch <slug> --participant codex --tier 1 --root <root>
-
-# 3. 状況を見る（観測専用。手数に数えない）
-python -m roundtable.cli status <slug> --root <root>
-
-# 4. 裁定して閉じる                                  ← 人間の操作 3
-python -m roundtable.cli close <slug> --verdict "結論" --root <root>
-```
-
-**KPI は「人間の操作 3 回以内」**で、自己申告ではなく journal に機械記録される。
-`status` を何回叩いても増えない（観測が KPI を汚さないため）。
 
 ## 議事録の構造
 
@@ -143,16 +149,19 @@ Tier1 が失敗したら**自動で Tier3 に落ちる**（勝手に Tier2 へ�
 
 ## ドキュメント
 
+入口は次の 3 つ。それ以外は設計・履歴・細部。
+
 | ファイル | 内容 |
 |---|---|
 | [責務・運用完了条件・ロードマップ](docs/ROADMAP.md) | 現在のゴール、担当境界、完了基準、進める順序 |
+| [Macの席への受渡し](docs/operations/mac-handoff.md) | handoff / handoff-status、送達不明時の再送防止 |
+| [検証記録](docs/operations/collection-recovery-verification.md) | 実測状態の正本（CMUX往復・指定席・常設再開） |
 | [docs/DESIGN.md](docs/DESIGN.md) | 設計書 v6。決定事項 D1–D13 とその根拠 |
 | [docs/prior-art.md](docs/prior-art.md) | 先行事例と立ち位置（既存で代替できないかの裏取り） |
 | [docs/PROTOCOL.md](docs/PROTOCOL.md) | 席と dispatcher の間の契約 |
 | [docs/adr/](docs/adr/) | アーキテクチャ決定記録（0001: 公式 Codex SDK への段階移行） |
 | [docs/operations/](docs/operations/) | 運用記録 |
 | [回答の発見・回収と担当再開](docs/operations/collection-recovery.md) | 有限待機、遅着回収、取消、再開の保証境界 |
-| [Macの席への受渡し](docs/operations/mac-handoff.md) | handoff / handoff-status、送達不明時の再送防止 |
 | [Mac優先のDesktop接続](docs/operations/mac-desktop-connection.md) | CMUX・Round Table・Claude Desktop Codeの接続と保証範囲 |
 | [CMUXの4席案](docs/operations/cmux-four-ai-proposal.md) | 入口調査と採否後の最小スモーク案 |
 | [docs/review-backlog.md](docs/review-backlog.md) | レビュー指摘と対応の記録（撤回した判断も含む） |
