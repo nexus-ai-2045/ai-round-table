@@ -15,15 +15,23 @@
 
 ## クイックスタート
 
+前提: [`uv`](https://docs.astral.sh/uv/) が入っていること（未導入なら公式手順で入れる）。
+
 ```bash
+git clone https://github.com/nexus-ai-2045/ai-round-table.git
+cd ai-round-table
 # 導入（推奨）。ソース変更後は再インストール。開発中だけ --editable を付ける
-uv tool install /absolute/path/to/ai-round-table
+uv tool install "$(pwd)"
 # 代替: python -m pip install .  →  python -m roundtable.cli …
 # 登録後はリポジトリ外から ai-roundtable --help
 
 # 0. 環境診断（Tier1 が使えるか）
 ai-roundtable doctor
+```
 
+`--root` は議事録（`minutes/`）を置く作業対象リポジトリのルートパス。
+
+```bash
 # 1. 議題を立てる                                   ← 人間の操作 1
 ai-roundtable new-topic <slug> \
   --topic "議論したいこと" --participants codex,grok --root <root>
