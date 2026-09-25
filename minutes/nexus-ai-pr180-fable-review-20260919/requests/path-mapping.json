@@ -1,0 +1,45 @@
+{
+  "purpose": "配信時に Path.resolve() された絶対パス付きリクエスト包を、公開用の相対パスへ赤入れした対応と、元バイト列の SHA-256 を残す。絶対パス文字列自体は追跡ファイルに載せない。",
+  "placeholder": "<host-repo-root>",
+  "path_style": "POSIX Path.resolve()（スラッシュ区切り）。配信ホストの ai-round-table ルートを <host-repo-root> とする。",
+  "generation_rule": "roundtable.packet.build → (TopicPaths の scratch/snapshot).resolve()。handoff._capture_request が requests/<inv>.snapshot.md に固定する。",
+  "redaction": {
+    "rule": "絶対パス（<host-repo-root>/ + 相対サフィックス）→ リポジトリ相対パス",
+    "absolute_to_relative": "公開側の requests/*.md は相対サフィックスのみ。ホストのホーム・/tmp 等の絶対プレフィックスはコミットしない。",
+    "content_redaction": "snapshot / minutes / journal は private 側識別・内部詳細・ホスト絶対パスを伏せた公開要約へ置換。元バイト列の digest のみ残す。"
+  },
+  "provenance": {
+    "repo_sync_layout": "docs/operations/mac-handoff.md の同期先レイアウト（$HOME/Projects/Documents/.repos/nexus_ai/ai-round-table）。",
+    "note": "original_sha256 は配信時相当の絶対パス版を、上記レイアウトのホストルートで再構成して算出した。公開ファイルにはルート文字列を書かない。手元に元 capture がある場合は、そのバイト列の SHA-256 と一致することを確認する。"
+  },
+  "packets": {
+    "d9af80a91ac3.md": {
+      "original_sha256": "f18de520894247582c5068b02d9640a8c6a774e8f80af68a3ccb412ced5db20c",
+      "redacted_sha256": "6231882d68a5af3c888529dc437d57ed2be339931aa1e2272fda52c66555480d",
+      "placeholder_paths": {
+        "snapshot": "<host-repo-root>/minutes/nexus-ai-pr180-fable-review-20260919/requests/d9af80a91ac3.snapshot.md",
+        "scratch_tmp": "<host-repo-root>/minutes/nexus-ai-pr180-fable-review-20260919/scratch/d9af80a91ac3.json.tmp",
+        "scratch": "<host-repo-root>/minutes/nexus-ai-pr180-fable-review-20260919/scratch/d9af80a91ac3.json"
+      },
+      "relative_suffixes": {
+        "snapshot": "minutes/nexus-ai-pr180-fable-review-20260919/requests/d9af80a91ac3.snapshot.md",
+        "scratch_tmp": "minutes/nexus-ai-pr180-fable-review-20260919/scratch/d9af80a91ac3.json.tmp",
+        "scratch": "minutes/nexus-ai-pr180-fable-review-20260919/scratch/d9af80a91ac3.json"
+      }
+    }
+  },
+  "snapshots": {
+    "d9af80a91ac3.snapshot.md": {
+      "original_sha256": "42f2196892697017a5a56f35c6d86c23d5595411e191eeccfbda2c741377daa6",
+      "redacted_sha256": "e6742788a6d7954c16e5808802aa0bd82c5f6963be6ddcfb335b9ee356b8fe74",
+      "note": "original は capture 時点のスナップショット本文（公開履歴から除去済み）。redacted は本ブランチ追跡中の公開要約。"
+    }
+  },
+  "verification": [
+    "追跡中の requests/d9af80a91ac3.md 本文の SHA-256 が packets.d9af80a91ac3.md.redacted_sha256 と一致すること。",
+    "追跡中の requests/d9af80a91ac3.snapshot.md 本文の SHA-256 が snapshots.d9af80a91ac3.snapshot.md.redacted_sha256 と一致すること。",
+    "本文にホスト絶対パス（ホーム・/tmp 等）や private PR URL/SHA が残っていないこと。",
+    "相対サフィックスは本トピックの追跡ファイル（requests/*.snapshot.md）と scratch 契約パスと一致すること。",
+    "手元の配信ホストで <host-repo-root> を実ルートに展開した packet 本文の SHA-256 が packets.d9af80a91ac3.md.original_sha256 と一致すること（一致確認は非公開環境のみ）。"
+  ]
+}
