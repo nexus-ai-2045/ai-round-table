@@ -1,0 +1,62 @@
+{
+ "round": 4,
+ "invocations": {
+  "88af9d575848": {
+   "participant": "claude",
+   "round": 1,
+   "state": "merged",
+   "detail": ""
+  },
+  "9666b1769f99": {
+   "participant": "claude",
+   "round": 2,
+   "state": "merged",
+   "detail": ""
+  },
+  "03af697e20ae": {
+   "participant": "claude",
+   "round": 3,
+   "state": "merged",
+   "detail": ""
+  }
+ },
+ "human_actions": [
+  {
+   "id": "37295dc12992",
+   "action": "new-topic",
+   "detail": "zeirishi-integrated-design-v2-20260905",
+   "at": "2026-09-05T12:49:25.117378+00:00"
+  },
+  {
+   "id": "f9b357c10796",
+   "action": "dispatch",
+   "detail": "claude:88af9d575848",
+   "at": "2026-09-05T12:50:54.676866+00:00"
+  },
+  {
+   "id": "6a83c7b52e23",
+   "action": "set-background",
+   "detail": "zeirishi-integrated-design-v2-20260905",
+   "at": "2026-09-05T18:03:59.350164+00:00"
+  },
+  {
+   "id": "bfadbbe7c2b5",
+   "action": "dispatch",
+   "detail": "claude:9666b1769f99",
+   "at": "2026-09-05T18:04:18.971450+00:00"
+  },
+  {
+   "id": "1468f985e5b0",
+   "action": "set-background",
+   "detail": "zeirishi-integrated-design-v2-20260905",
+   "at": "2026-09-06T06:23:08.562958+00:00"
+  },
+  {
+   "id": "89b34b92a05a",
+   "action": "dispatch",
+   "detail": "claude:03af697e20ae",
+   "at": "2026-09-06T06:23:09.864984+00:00"
+  }
+ ],
+ "conflicts": []
+}

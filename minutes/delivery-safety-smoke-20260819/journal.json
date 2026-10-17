@@ -1,0 +1,38 @@
+{
+ "round": 3,
+ "invocations": {
+  "fbd7970ceec6": {
+   "participant": "codex",
+   "round": 1,
+   "state": "merged",
+   "detail": ""
+  },
+  "239d4fe6f985": {
+   "participant": "codex",
+   "round": 2,
+   "state": "merged",
+   "detail": ""
+  }
+ },
+ "human_actions": [
+  {
+   "id": "e062ef85b204",
+   "action": "new-topic",
+   "detail": "delivery-safety-smoke-20260819",
+   "at": "2026-08-19T00:29:19.158991+00:00"
+  },
+  {
+   "id": "bc72165c8b63",
+   "action": "dispatch",
+   "detail": "codex:fbd7970ceec6",
+   "at": "2026-08-19T00:29:20.653362+00:00"
+  },
+  {
+   "id": "976723261c9e",
+   "action": "dispatch",
+   "detail": "codex:239d4fe6f985",
+   "at": "2026-08-19T00:30:59.114226+00:00"
+  }
+ ],
+ "conflicts": []
+}

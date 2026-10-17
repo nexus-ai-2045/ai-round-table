@@ -1,0 +1,162 @@
+name: repository-guarantees
+
+# 本流と同じ開発保証。検査ロジックは上流のまま。engineering-brain は埋め込まない。
+# Actions 課金を増やさないため、pull_request / push では起動しない（workflow_dispatch のみ）。
+# 手元同等の確認手順は PREFLIGHT.md と PR 本文を参照。
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # repo-preflight 上流の検査ロジック正本（コピーしない）。SHA 固定 + checkout 後に照合。
+  REPO_PREFLIGHT_SHA: f825268978228a3cfb2f5ecba16a74d424134b1a
+
+jobs:
+  repository-guarantees:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: utf-8
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Resolve consistency base-ref (empty-diff fail-closed on dispatch)
+        id: consistency
+        shell: bash
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          HEAD="$(git rev-parse HEAD)"
+          REMOTE_REF="origin/${DEFAULT_BRANCH}"
+          git fetch --no-tags origin "$DEFAULT_BRANCH"
+          BASE="$(git rev-parse "$REMOTE_REF")"
+          if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ]; then
+            echo "consistency base-ref を解決できない → fail-closed" >&2
+            exit 1
+          fi
+          # dispatch で BASE==HEAD（空 diff）なら落とす。緑の空振りを防ぐ。
+          if [ "$BASE" = "$HEAD" ]; then
+            echo "空diff fail-closed: workflow_dispatch で BASE==HEAD ($HEAD)" >&2
+            echo "feature 枝を選んで再実行するか、手元で BASE=origin/${DEFAULT_BRANCH} を指定して同等確認してください。" >&2
+            exit 1
+          fi
+          REMOTE_RESOLVED="$(git rev-parse --symbolic-full-name "$REMOTE_REF")"
+          case "$REMOTE_RESOLVED" in
+            refs/remotes/origin/*) ;;
+            *)
+              echo "remote symbolic ref が不正: $REMOTE_RESOLVED" >&2
+              exit 1
+              ;;
+          esac
+          {
+            echo "base_ref=$BASE"
+            echo "remote_ref=$REMOTE_REF"
+          } >> "$GITHUB_OUTPUT"
+          echo "Resolved consistency base_ref=$BASE remote_ref=$REMOTE_REF head=$HEAD event=workflow_dispatch"
+
+      - name: Fetch pinned repo-preflight (no logic copy)
+        run: |
+          set -euo pipefail
+          git clone --no-checkout https://github.com/nexus-ai-2045/repo-preflight.git "$RUNNER_TEMP/repo-preflight"
+          git -C "$RUNNER_TEMP/repo-preflight" checkout --detach "$REPO_PREFLIGHT_SHA"
+          test "$(git -C "$RUNNER_TEMP/repo-preflight" rev-parse HEAD)" = "$REPO_PREFLIGHT_SHA"
+
+      - name: Install pinned ai-ratchet-gate wheel
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install --require-hashes -r requirements-tools.txt
+
+      - name: Smoke-check ai-ratchet-gate CLI
+        run: |
+          set -euo pipefail
+          python -m ai_ratchet_gate --help | grep -F "tracked∧ignored"
+
+      - name: ai-ratchet-gate (tracked∧ignored, fail-closed on new debt)
+        run: python -m ai_ratchet_gate --repo .
+
+      - name: repo-preflight readiness_scan (evidence)
+        env:
+          CONSISTENCY_REMOTE_REF: ${{ steps.consistency.outputs.remote_ref }}
+        run: |
+          set -euo pipefail
+          set +e
+          # --consistency-base-ref は publish/release か --release が必要。証拠として --release を付ける。
+          python "$RUNNER_TEMP/repo-preflight/scripts/readiness_scan.py" \
+            --repo . \
+            --release \
+            --consistency-base-ref "$CONSISTENCY_REMOTE_REF" \
+            > "$RUNNER_TEMP/readiness.json"
+          scan_rc=$?
+          set -e
+          SCAN_RC="$scan_rc" python - <<'PY'
+          import json
+          import os
+          import pathlib
+          import sys
+
+          path = pathlib.Path(os.environ["RUNNER_TEMP"]) / "readiness.json"
+          payload = json.loads(path.read_text(encoding="utf-8"))
+          status = payload.get("status")
+          print(f"readiness_scan status={status!r} cli_rc={os.environ.get('SCAN_RC')!r}")
+          consistency = (payload.get("checks") or {}).get("repository_consistency") or {}
+          print(
+              "repository_consistency="
+              f"{consistency.get('status')!r} mode={consistency.get('mode')!r}"
+          )
+          # tool_error だけ fail-closed。blocked/pass は証拠として残し、merge 承認にはしない。
+          if status == "tool_error":
+              print(json.dumps(payload, ensure_ascii=False, indent=2)[:4000])
+              sys.exit(1)
+          PY
+
+      - name: repo-preflight consistency_gate
+        env:
+          CONSISTENCY_BASE: ${{ steps.consistency.outputs.base_ref }}
+        run: |
+          set -euo pipefail
+          set +e
+          python "$RUNNER_TEMP/repo-preflight/scripts/consistency_gate.py" \
+            --repo . \
+            --base-ref "$CONSISTENCY_BASE" \
+            --require-config \
+            --require-mode shadow \
+            --json > "$RUNNER_TEMP/consistency.json"
+          gate_rc=$?
+          set -e
+          GATE_RC="$gate_rc" python - <<'PY'
+          import json
+          import os
+          import pathlib
+          import sys
+
+          payload = json.loads(
+              (pathlib.Path(os.environ["RUNNER_TEMP"]) / "consistency.json").read_text(
+                  encoding="utf-8"
+              )
+          )
+          status = payload.get("status")
+          mode = payload.get("mode")
+          print(
+              f"consistency_gate status={status!r} mode={mode!r} "
+              f"cli_rc={os.environ.get('GATE_RC')!r}"
+          )
+          print(json.dumps(payload, ensure_ascii=False, indent=2))
+          # shadow: 所見は止めない。設定欠落・mode 弱体化・tool_error・enforce 相当 fail は止める。
+          if status in {"pass", "shadow_findings"}:
+              sys.exit(0)
+          sys.exit(1)
+          PY

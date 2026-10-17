@@ -1,0 +1,16 @@
+name: preflight
+
+# repo-preflight の共通 CI ゲート。全履歴を検査し、.repo-preflight/ratchet-baseline.json
+# とのラチェットで判定する。
+on:
+  pull_request:
+  merge_group:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  gate:
+    uses: nexus-ai-2045/repo-preflight/.github/workflows/preflight-gate.yml@93751adc49e9c63d119a18e69784d5163d939ebb # main（#89 の修正入り）
+    with:
+      preflight-ref: 93751adc49e9c63d119a18e69784d5163d939ebb
