@@ -18,7 +18,7 @@ repo-preflight の検査結果と、それに対する人間の判断を記録�
 | 契約 | 上流 | 設定 | 扱い |
 |---|---|---|---|
 | 文書・実装の宣言整合 | `nexus-ai-2045/repo-preflight`（pin SHA） | `.repo-preflight-consistency.json`（`shadow`） | `consistency_gate` + `readiness_scan`。shadow 所見は止めない。`tool_error` は fail-closed |
-| tracked ∧ ignored の新規悪化 | `nexus-ai-2045/ai-ratchet-gate` v0.1.1（wheel + SHA-256） | `.ai-ratchet-gate/baseline.txt` | 既存分は grandfather。baseline に無い新規だけ deny |
+| tracked ∧ ignored の新規悪化 | `nexus-ai-2045/ai-ratchet-gate` v0.2.0（wheel + SHA-256） | `.ai-ratchet-gate/baseline.txt` | 既存分は grandfather。baseline に無い新規だけ deny |
 
 古い `.repo-preflight.json` は preferences 用途の旧名だったため、整合契約は `.repo-preflight-consistency.json` へ canonicalize し、旧ファイルは残さない。
 
