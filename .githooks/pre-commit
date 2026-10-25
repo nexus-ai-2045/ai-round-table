@@ -57,7 +57,7 @@ fi
 # ここは fail-OPEN にする。ゲートが見つからないのは「矛盾が増えた」証拠ではなく
 # **この環境にツールが無いだけ**で、それで他セッションの commit まで止めるのは
 # 巻き添えが大きすぎる。素通りしたことを目立つ形で残し、関所の網羅は
-# workflow_dispatch の repository-guarantees / 手元同等確認に委ねる。
+# PR の必須チェック（all-green）と手元同等確認に委ねる。
 if [ -z "$GATE_MODE" ] || [ -z "$PY" ]; then
     echo "WARN [pre-commit]: ai-ratchet-gate を実行できませんでした (commit は通します)" >&2
     [ -z "$GATE_MODE" ] && \
