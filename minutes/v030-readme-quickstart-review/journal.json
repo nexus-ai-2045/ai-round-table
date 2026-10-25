@@ -1,0 +1,73 @@
+{
+ "round": 3,
+ "invocations": {
+  "5f0c41c243ad": {
+   "participant": "codex",
+   "round": 1,
+   "state": "merged",
+   "detail": ""
+  },
+  "782f0f391815": {
+   "participant": "codex",
+   "round": 2,
+   "state": "delivery-unknown",
+   "detail": "delivery-unknown: thread/resume continuity unknown; automatic Tier3 fallback disabled: thread/resume: {'code': -32601, 'message': 'paginated_threads is not supported yet'}"
+  },
+  "99618816e8a2": {
+   "participant": "codex",
+   "round": 2,
+   "state": "waiting",
+   "detail": "timeout",
+   "delivery_route": "relay",
+   "delivery_confirmed": true
+  },
+  "7b66557f1f07": {
+   "participant": "codex",
+   "round": 2,
+   "state": "merged",
+   "detail": "recovered-from-tmp: 7b66557f1f07.json.tmp",
+   "delivery_route": "relay",
+   "delivery_confirmed": true,
+   "response_sha256": "dbe6f1265181eada8fe321ffa6ab1754386e0dc92958600261dfdd37d805bed4"
+  }
+ },
+ "human_actions": [
+  {
+   "id": "b3832f47227b",
+   "action": "new-topic",
+   "detail": "v030-readme-quickstart-review",
+   "at": "2026-09-02T00:30:41.963080+00:00"
+  },
+  {
+   "id": "f1b0535e654e",
+   "action": "dispatch",
+   "detail": "codex:5f0c41c243ad",
+   "at": "2026-09-02T00:31:34.052690+00:00"
+  },
+  {
+   "id": "ecba73979172",
+   "action": "dispatch",
+   "detail": "codex:782f0f391815",
+   "at": "2026-09-12T07:09:04.817774+00:00"
+  },
+  {
+   "id": "0e3c86cf1541",
+   "action": "dispatch",
+   "detail": "codex:99618816e8a2",
+   "at": "2026-09-12T07:37:57.289219+00:00"
+  },
+  {
+   "id": "a4e1716190fc",
+   "action": "dispatch",
+   "detail": "codex:7b66557f1f07",
+   "at": "2026-09-19T16:28:06.514861+00:00"
+  },
+  {
+   "id": "eba898fa763b",
+   "action": "close",
+   "detail": "Round 2 実席スモーク失敗。Codex席が指定snapshotを観測できず、README Quickstart の内容レビューは未完了。承認・却下は判断せず、このsmokeの結果としてclose。",
+   "at": "2026-09-19T17:02:29.548875+00:00"
+  }
+ ],
+ "conflicts": []
+}

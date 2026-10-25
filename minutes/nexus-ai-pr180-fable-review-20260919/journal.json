@@ -1,0 +1,35 @@
+{
+ "round": 2,
+ "invocations": {
+  "d9af80a91ac3": {
+   "participant": "grok",
+   "round": 1,
+   "state": "merged",
+   "detail": "",
+   "delivery_route": "relay",
+   "delivery_confirmed": true,
+   "response_sha256": "37b1cc41d20149324abfbbc363a4bf15e9905adf0a36c7dce78ecc673f2265dd"
+  }
+ },
+ "human_actions": [
+  {
+   "id": "58fcf00082b1",
+   "action": "new-topic",
+   "detail": "nexus-ai-pr180-fable-review-20260919",
+   "at": "2026-09-18T18:40:57.126722+00:00"
+  },
+  {
+   "id": "9eeb65db6a1b",
+   "action": "dispatch",
+   "detail": "grok:d9af80a91ac3",
+   "at": "2026-09-18T18:41:12.627634+00:00"
+  },
+  {
+   "id": "1eafd1028904",
+   "action": "close",
+   "detail": "独立レビュー円卓を閉じた。指摘の扱いは private 側で完了し、対象変更は本人が merge。詳細な指摘・内部パス・private 側識別子は公開議事録から伏せる。裁定の根拠は本人の発話『OK』『両方マージ済み』『全て推奨でGO』で、入力は Claude が代行",
+   "at": "2026-09-19T09:49:38.271676+00:00"
+  }
+ ],
+ "conflicts": []
+}
