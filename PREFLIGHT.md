@@ -24,7 +24,7 @@ repo-preflight の検査結果と、それに対する人間の判断を記録�
 
 ### トリガ方針（Actions 課金）
 
-- 開発保証 workflow（`repository-guarantees.yml`）は **`workflow_dispatch` のみ**。`pull_request` / `push` では起動しない
+- 開発保証の専用 workflow（旧 `repository-guarantees.yml`、`workflow_dispatch` のみ）は、実行 0 回で検査が PR の必須チェック（`public-privacy-preflight.yml` の `all-green`）と重なるため 2026-10-25 に外した。整合・readiness は必須チェックが PR ごとに見る。ai-ratchet-gate は pre-commit と下の手元同等確認で見る
 - `workflow_dispatch` で BASE と HEAD が同一（空 diff）のときは差分検査を緑にしない（fail-closed）
 - 既存の `test.yml`（pytest）は別契約。本節の開発保証とは混ぜない
 
@@ -55,7 +55,7 @@ python /tmp/repo-preflight/scripts/readiness_scan.py \
   --repo . --release --consistency-base-ref origin/main
 ```
 
-Actions で同等確認する場合は、feature 枝を選んで `repository-guarantees` を `workflow_dispatch` する（default branch 直上だと空 diff で fail-closed）。
+Actions では必須チェック `all-green`（preflight-gate の consistency_gate・readiness_scan・ratchet）が PR ごとに同じ範囲を見る。
 
 `REPO_PREFLIGHT_SHA` は repo-preflight の `main` に入っている commit にする。PR ブランチの SHA は squash merge と枝削除のあと clone から取れなくなり、`checkout` が `unable to read tree` で止まる。
 
