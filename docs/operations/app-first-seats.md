@@ -79,7 +79,11 @@ ai-roundtable browser-collect <topic> --invocation <id> --root <root>
 - [Claudeの公式ディープリンク](https://support.claude.com/en/articles/14729294-open-claude-desktop-with-a-link)：新規入力欄の事前入力。
 - [Claude Desktopの公式仕様](https://code.claude.com/docs/en/desktop#coming-from-the-cli)：CLIとアプリのセッション一覧・引継ぎを区別。
 - [agent-browser](https://github.com/vercel-labs/agent-browser)：CDP接続時のDOM取得・要素操作。既存環境では接続口を確認できず、今回の実送信には使用していません。
-- [Peekaboo](https://github.com/openclaw/Peekaboo)：Macアプリ操作のCLI/MCP候補。今回導入していません。
+- [Peekaboo](https://github.com/openclaw/Peekaboo)：Macアプリ操作のCLI/MCP候補。
+  4.9.7をnpm execで起動し、既存Claudeプロセスとウィンドウ一覧、利用許可を確認しました。
+  ただし対象ウィンドウのAX要素が見つからず、focusは操作前に拒否されました。
+  取得できた部分ツリーも操作可能なsnapshotではなく、このホストでの既存画面の再利用は未達です。
+  新しいウィンドウの作成や権限変更でこの失敗を迂回していません。
 
 ## 検証と改善
 
