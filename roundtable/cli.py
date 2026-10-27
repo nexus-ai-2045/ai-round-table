@@ -351,10 +351,14 @@ def _cmd_handoff(args) -> int:
             tp, args.invocation, transport=args.transport,
             workspace=args.workspace, surface=args.surface,
             script=Path(args.cmux_script) if args.cmux_script else None,
+            browser_window=getattr(args, "browser_window", None),
+            browser_tab=getattr(args, "browser_tab", None),
+            browser_url=getattr(args, "browser_url", None),
+            browser_account=getattr(args, "browser_account", None),
         )
         if args.apply and result.get("ok"):
             result = handoff.deliver(tp, args.invocation, timeout_s=args.timeout)
-    except (ValueError, OSError) as exc:
+    except (ValueError, OSError, RuntimeError) as exc:
         result = {"ok": False, "reason": "handoff-invalid", "detail": str(exc)}
     payload = {**result, "invocation": args.invocation,
                "exit_code": 0 if result.get("ok") else 1}
@@ -396,6 +400,42 @@ def _cmd_followup(args) -> int:
         result = {"ok": False, "reason": "followup-invalid", "detail": str(exc)}
     print(json.dumps(result, ensure_ascii=False, indent=1))
     return 0 if result.get("ok") else 1
+
+
+def _cmd_app_link(args) -> int:
+    from .app_links import claude_new_link, claude_session_link
+    import subprocess
+    try:
+        if args.session_id:
+            if args.folder:
+                raise ValueError("folder cannot be combined with session-id")
+            url = claude_session_link(args.session_id)
+        else:
+            url = claude_new_link(Path(args.prompt_file).read_text(encoding="utf-8"), args.folder)
+        if args.open:
+            if sys.platform != "darwin":
+                raise ValueError("native opening currently supports macOS only")
+            subprocess.run(["open", url], check=True, capture_output=True, timeout=15)
+        print(json.dumps({"ok": True, "url": url, "opened": args.open, "submitted": False}, ensure_ascii=False))
+        return 0
+    except (ValueError, OSError, subprocess.SubprocessError):
+        print(json.dumps({"ok": False, "reason": "app-link-invalid-or-open-failed"}))
+        return 1
+
+
+def _cmd_browser_collect(args) -> int:
+    from . import handoff
+    if not (topic_dir(Path(args.root), args.slug) / "minutes.md").is_file():
+        print(json.dumps({"ok": False, "reason": "unknown-topic"}))
+        return 2
+    tp = ensure_topic(Path(args.root), args.slug)
+    try:
+        result = handoff.collect_browser(tp, args.invocation)
+    except (ValueError, OSError, RuntimeError) as exc:
+        result = {"ok": False, "reason": "browser-collect-failed", "detail": str(exc)}
+    _write_last_result(tp, result)
+    print(json.dumps(result, ensure_ascii=False, indent=1))
+    return 0 if result.get("ok") or result.get("state") == "merged" else 1
 
 
 def _cmd_handoff_status(args) -> int:
@@ -664,13 +704,31 @@ def _build_parser() -> argparse.ArgumentParser:
     p_ho.add_argument("slug")
     p_ho.add_argument("--root", required=True)
     p_ho.add_argument("--invocation", required=True)
-    p_ho.add_argument("--transport", choices=("cmux", "claude-desktop"), required=True)
+    p_ho.add_argument("--transport", choices=("cmux", "claude-desktop", "claude-link", "grok-browser"), required=True)
+    p_ho.add_argument("--browser-window", type=int, help="既存Chromeのwindow ID")
+    p_ho.add_argument("--browser-tab", type=int, help="既存Grok tab ID")
+    p_ho.add_argument("--browser-url", help="送信直前に照合する既存GrokのURL")
+    p_ho.add_argument("--browser-account", help="人間が確認したGrokアカウントメニューの完全な表示名")
     p_ho.add_argument("--workspace", help="CMUX workspace UUID")
     p_ho.add_argument("--surface", help="CMUX surface UUID")
     p_ho.add_argument("--cmux-script", help="既存cmux_file_signal.pyの絶対パス")
     p_ho.add_argument("--apply", action="store_true", help="固定した依頼を選択済み搬送へ渡す")
     p_ho.add_argument("--timeout", type=_positive_seconds, default=30.0)
     p_ho.set_defaults(func=_cmd_handoff)
+
+    p_al = sub.add_parser("app-link", help="Claudeアプリの新規入力欄または既存チャットへのリンクを作る")
+    target = p_al.add_mutually_exclusive_group(required=True)
+    target.add_argument("--session-id", help="検証済みのClaude Desktop local_UUID")
+    target.add_argument("--prompt-file", help="新規Code入力欄へ渡すUTF-8本文")
+    p_al.add_argument("--folder", help="明示した時だけ作業フォルダを渡す（信頼確認が発生）")
+    p_al.add_argument("--open", action="store_true", help="macOSでアプリを開く。送信はしない")
+    p_al.set_defaults(func=_cmd_app_link)
+
+    p_bc = sub.add_parser("browser-collect", help="ブラウザの回答を既存の検証・議事録回収へ渡す")
+    p_bc.add_argument("slug")
+    p_bc.add_argument("--root", required=True)
+    p_bc.add_argument("--invocation", required=True)
+    p_bc.set_defaults(func=_cmd_browser_collect)
 
     p_hs = sub.add_parser("handoff-status", help="搬出receiptと回収状態を読む")
     p_hs.add_argument("slug")

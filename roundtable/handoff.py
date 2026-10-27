@@ -117,7 +117,8 @@ def capture_request(tp: TopicPaths, inv_id: str, text: str) -> str:
 
 
 def prepare(tp: TopicPaths, inv_id: str, transport="cmux", workspace=None,
-            surface=None, script=None) -> dict:
+            surface=None, script=None, browser_window=None, browser_tab=None, browser_url=None,
+            browser_account=None) -> dict:
     """Persist an immutable packet/snapshot and bind an explicit destination."""
     with _invocation_lock(tp, inv_id):
         rec = Journal.load(tp).data["invocations"].get(inv_id)
@@ -131,16 +132,29 @@ def prepare(tp: TopicPaths, inv_id: str, transport="cmux", workspace=None,
             process = _PROCESSES.get(rec["participant"])
             if process is None:
                 raise ValueError("participant has no supported cmux process mapping")
-        elif transport == "claude-desktop":
+        elif transport in {"claude-desktop", "claude-link"}:
             if workspace is not None or surface is not None or script is not None:
                 raise ValueError("claude-desktop does not accept cmux destination options")
             if _PROCESSES.get(rec["participant"]) != "claude":
                 raise ValueError("claude-desktop requires participant claude")
             process = None
+        elif transport == "grok-browser":
+            from .browser_seat import validate_target
+            if rec["participant"] != "grok" or any(x is not None for x in (workspace, surface, script)):
+                raise ValueError("grok-browser requires a Grok seat and explicit Chrome destination")
+            validate_target(browser_window, browser_tab, browser_url)
+            if not isinstance(browser_account, str) or not browser_account.strip():
+                raise ValueError("explicit expected browser account label required")
+            process = None
         else:
             raise ValueError("unsupported handoff transport")
         config = dict(invocation=inv_id, participant=rec["participant"], transport=transport,
                       workspace=workspace, surface=surface, script=script, require_process=process)
+        if transport == "grok-browser":
+            config.update(browser_window=browser_window, browser_tab=browser_tab, browser_url=browser_url,
+                          browser_account=browser_account)
+        elif any(x is not None for x in (browser_window, browser_tab, browser_url, browser_account)):
+            raise ValueError("browser destination options require grok-browser")
         request, snapshot, receipt = _paths(tp, inv_id)
         for directory in (request.parent, receipt.parent):
             directory.mkdir(parents=True, exist_ok=True)
@@ -231,6 +245,21 @@ def deliver(tp: TopicPaths, inv_id: str, timeout_s=30) -> dict:
                     "--workspace", record["workspace"], "--surface", record["surface"],
                     "--path-only", "--no-control-block", "--mode", "pointer", "--transport", "file",
                     "--require-process", record["require_process"], "--verify-submit", "--verify-submit-json"]
+        elif record["transport"] == "grok-browser":
+            from . import browser_seat
+            target = (record["browser_window"], record["browser_tab"], record["browser_url"])
+            observed = browser_seat.inspect(*target)
+            if observed.get("account") != record["browser_account"]:
+                return _result(record, ok=False, reason="browser-account-unverified-or-changed")
+            if observed.get("editor_count") != 1 or not observed.get("draft_empty"):
+                return _result(record, ok=False, reason="browser-not-ready-draft-preserved")
+            browser_prompt = browser_seat.build_prompt(inv_id, record["participant"],
+                                                       ledger.read_state(snapshot).decode("utf-8"))
+        elif record["transport"] == "claude-link":
+            from .app_links import claude_new_link
+            app_url = claude_new_link(verified_packet.decode("utf-8"))
+            if sys.platform != "darwin":
+                raise ValueError("claude-link launch currently supports macOS only")
         else:
             try:
                 command, _, _ = packet.clipboard_command()
@@ -243,7 +272,16 @@ def deliver(tp: TopicPaths, inv_id: str, timeout_s=30) -> dict:
         record["state"] = "sending"
         _save(receipt, record)  # Durable before any possible clipboard/send side effect.
         try:
-            if record["transport"] == "claude-desktop":
+            if record["transport"] == "claude-link":
+                result = subprocess.run(["open", app_url], shell=False, capture_output=True,
+                                        timeout=timeout_s)
+                record.update(state="composer-ready" if result.returncode == 0 else "delivery-unknown",
+                              returncode=result.returncode, next_action="verify-composer-and-submit")
+            elif record["transport"] == "grok-browser":
+                observed = browser_seat.send(*target, browser_prompt, record["browser_account"])
+                record.update(state="submitted", browser_submit=observed,
+                              next_action="browser-collect")
+            elif record["transport"] == "claude-desktop":
                 packet.to_clipboard(verified_packet.decode("utf-8"), timeout_s=timeout_s)
                 record.update(state="clipboard-ready", next_action="human-paste-required")
             else:
@@ -253,7 +291,47 @@ def deliver(tp: TopicPaths, inv_id: str, timeout_s=30) -> dict:
                               returncode=result.returncode,
                               # Output can contain private screen text. Keep only a digest.
                               transport_output_sha256=_hash(result.stdout or b""))
-        except (OSError, subprocess.SubprocessError, NotImplementedError) as exc:
+        except (OSError, subprocess.SubprocessError, NotImplementedError, RuntimeError, ValueError) as exc:
             record.update(state="delivery-unknown", reason=type(exc).__name__)
         _save(receipt, record)
         return _result(record)
+
+
+def collect_browser(tp: TopicPaths, inv_id: str) -> dict:
+    """Capture one complete browser opinion, then use the existing collector."""
+    from . import browser_seat, watcher
+    from .schema import validate_opinion
+    with _invocation_lock(tp, inv_id):
+        request, snapshot, receipt = _paths(tp, inv_id)
+        record = _read(receipt)
+        if not record or record.get("transport") != "grok-browser":
+            return {"ok": False, "reason": "not-a-browser-invocation"}
+        _verify(record, request, snapshot)
+        invocation = Journal.load(tp).data["invocations"].get(inv_id, {})
+        if invocation.get("state") == "merged":
+            return {"ok": True, "state": "merged", "already_collected": True}
+        if record["state"] not in {"submitted", "sending", "delivery-unknown"} or invocation.get("state") in {"cancelled", "failed"}:
+            return {"ok": False, "reason": "browser-invocation-not-collectable"}
+        observed = browser_seat.reply(record["browser_window"], record["browser_tab"], inv_id,
+                                      record["browser_account"])
+        if observed.get("state") != "answer-visible":
+            return {"ok": False, "state": observed.get("state", "waiting"), "next_action": "browser-collect"}
+        data = json.loads(observed["text"])
+        if (validate_opinion(data) or data.get("invocation_id") != inv_id
+                or data.get("participant") != record["participant"]):
+            raise ValueError("browser response does not match the invocation contract")
+        raw = json.dumps(data, ensure_ascii=False)
+        digest = _hash(raw.encode("utf-8"))
+        if record.get("response_sha256") != digest:
+            record.update(response_sha256=digest, response_url=observed["url"],
+                          next_action="browser-collect-again-to-confirm-stability")
+            _save(receipt, record)
+            return {"ok": False, "state": "answer-observed", "next_action": record["next_action"]}
+        output = tp.scratch / f"{inv_id}.json"
+        if output.exists() and output.read_bytes() != raw.encode("utf-8"):
+            raise ValueError("existing scratch response differs; not overwritten")
+        if not output.exists():
+            from .atomicio import atomic_write
+            atomic_write(output, raw)
+    # watcher acquires the same invocation lock, so release it first.
+    return watcher.collect(tp, Journal.load(tp), inv_id, record["participant"], timeout_s=0)

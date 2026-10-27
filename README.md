@@ -11,7 +11,7 @@
 - **API キー不要**。席は各 AI アプリの実チャットで、普段の課金のまま動く
 - **議事録が成果物**。git 管理された 1 枚の Markdown が唯一の共有状態
 
-**現状:** CMUX 往復可 / Claude Desktop 指定席は未確認 / 常設の自動再開は未接続。詳細は[検証記録](docs/operations/collection-recovery-verification.md)と[ロードマップ](docs/ROADMAP.md)。
+**現状:** CMUX 往復可 / Claude Desktop新規チャットの1依頼・1回答回収を実測 / 指定席の自動継続と常設の自動再開は未確認。詳細は[検証記録](docs/operations/collection-recovery-verification.md)と[ロードマップ](docs/ROADMAP.md)。
 
 ## クイックスタート
 
@@ -52,6 +52,10 @@ ai-roundtable close <slug> --verdict "結論" --root <root>
 **KPI は「人間の操作 3 回以内」**（`new-topic` / `dispatch` / `close`）。`status` は観測専用で手数に入らない。
 
 Mac の handoff / handoff-status / followup / collect などは [Macの席への受渡し](docs/operations/mac-handoff.md) を参照。回収後に元担当へ結果を戻す手順は [担当への返却](docs/operations/coordinator-followup.md)。
+
+アプリのチャットを見ながら使う入口は[アプリで見える円卓の受渡し](docs/operations/app-first-seats.md)です。
+Claudeの入力準備と既存チャットへのリンクを提供します。Grokブラウザ経路は実験段階で、
+有効な回答の実回収は未確認です。OrcaとGrok Botは別経路として後回しにしています。
 
 ## 目的と仕組み
 
