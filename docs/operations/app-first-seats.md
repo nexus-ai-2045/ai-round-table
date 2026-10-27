@@ -12,6 +12,42 @@ Grokブラウザ、Grok Build CLI、Cursor経由は別経路です。Cursorの�
 
 ## Claude Desktop
 
+既存チャットへの受渡しは `claude-socket` を使います。新しいウィンドウ、画面操作、
+クリップボード、再起動は使いません。macOS/Linuxの同一OSユーザー内に限定し、
+Windowsのnamed pipeや別端末は未対応です。送信先には `local_UUID` ではなく、
+稼働中のClaude CodeセッションUUIDを明示します。レジストリ・プロセス開始時刻・
+ソケット・会話記録を照合し、名前だけでは選びません。
+
+```bash
+ai-roundtable dispatch <topic> --participant claude --tier 3 --async --no-clipboard --root <root>
+ai-roundtable handoff <topic> --invocation <id> --transport claude-socket --claude-session <UUID> --root <root>
+ai-roundtable handoff <topic> --invocation <id> --transport claude-socket --claude-session <UUID> --apply --root <root>
+ai-roundtable socket-collect <topic> --invocation <id> --root <root>
+```
+
+`--apply` のないhandoffは依頼の固定のみです。`submitted` は通信フレームを書いた状態で、
+Claudeの受信・承認・回答を証明しません。受信側の保留・拒否を設定変更で回避しません。
+送信前に `sending` を記録し、途中失敗でも同じ依頼は再送しません。
+socket-collectは送信後の対象チャット記録から依頼番号とメッセージ番号を照合し、
+回答JSON・参加者・schemaを検証します。最初の `answer-observed` 後、もう一度collectし、
+同じ回答が確認された時だけ既存のscratch検証・議事録mergeへ進みます。
+不明・未回収・別入力の割込みは完了にしません。回収の再実行でも再送はしません。
+既存の出力フックによる差し戻しは、同じ会話のネイティブなメタ通知だけを識別します。
+差し戻された回答は破棄し、訂正後の最終回答を待ちます。通常の人間入力や他セッションの
+割込みとは区別し、フック自体の無効化・承認の代行は行いません。
+会話全体は複製せず、今回の回答と照合情報だけを既存の仕組みに記録します。
+
+公式文書 [Cross-session messaging](https://code.claude.com/docs/en/cross-session-messaging) は
+2026-10-28に全節を確認しました。通知購読、別端末、cloud、受信制御、非対話セッション、
+容量・連投制限も含みます。今回の範囲は同じMacの既存Desktop Codeチャットだけです。
+認証値・子プロセス識別・権限モードを偽装せず、受信設定や認証ファイルは変更しません。
+ソケットの存在と受信制御は公式仕様ですが、NDJSONの全フィールドや会話記録形式は
+公開された安定APIではありません。
+[先行実装](https://github.com/PeterSR/claude-code-socket-transport) と実機試験に基づく
+互換アダプターとして、照合できない場合は停止します。
+
+### 表示用リンク・新規入力欄（別経路）
+
 公式の `claude://code/new?q=...` は新規入力欄を開きます。送信や回答完了を意味しません。
 `folder` を渡すと信頼確認が必ず発生するため、既定では渡しません。
 既存のチャットは、アプリ側の `local_UUID` を指定して開きます。CLI側のUUIDとは区別します。

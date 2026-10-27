@@ -355,6 +355,7 @@ def _cmd_handoff(args) -> int:
             browser_tab=getattr(args, "browser_tab", None),
             browser_url=getattr(args, "browser_url", None),
             browser_account=getattr(args, "browser_account", None),
+            claude_session=getattr(args, "claude_session", None),
         )
         if args.apply and result.get("ok"):
             result = handoff.deliver(tp, args.invocation, timeout_s=args.timeout)
@@ -435,6 +436,21 @@ def _cmd_browser_collect(args) -> int:
         result = handoff.collect_browser(tp, args.invocation)
     except (ValueError, OSError, RuntimeError) as exc:
         result = {"ok": False, "reason": "browser-collect-failed", "detail": str(exc)}
+    _write_last_result(tp, result)
+    print(json.dumps(result, ensure_ascii=False, indent=1))
+    return 0 if result.get("ok") or result.get("state") == "merged" else 1
+
+
+def _cmd_socket_collect(args) -> int:
+    from . import handoff
+    if not (topic_dir(Path(args.root), args.slug) / "minutes.md").is_file():
+        print(json.dumps({"ok": False, "reason": "unknown-topic"}))
+        return 2
+    tp = ensure_topic(Path(args.root), args.slug)
+    try:
+        result = handoff.collect_socket(tp, args.invocation)
+    except (ValueError, OSError, RuntimeError) as exc:
+        result = {"ok": False, "reason": "socket-collect-failed", "detail": str(exc)}
     _write_last_result(tp, result)
     print(json.dumps(result, ensure_ascii=False, indent=1))
     return 0 if result.get("ok") or result.get("state") == "merged" else 1
@@ -706,7 +722,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p_ho.add_argument("slug")
     p_ho.add_argument("--root", required=True)
     p_ho.add_argument("--invocation", required=True)
-    p_ho.add_argument("--transport", choices=("cmux", "claude-desktop", "claude-link", "grok-browser"), required=True)
+    p_ho.add_argument("--transport", choices=("cmux", "claude-desktop", "claude-link", "grok-browser", "claude-socket"), required=True)
+    p_ho.add_argument("--claude-session", help="既存Claude DesktopのセッションUUID（local_接頭辞なし）")
     p_ho.add_argument("--browser-window", type=int, help="既存Chromeのwindow ID")
     p_ho.add_argument("--browser-tab", type=int, help="既存Grok tab ID")
     p_ho.add_argument("--browser-url", help="送信直前に照合する既存GrokのURL")
@@ -731,6 +748,12 @@ def _build_parser() -> argparse.ArgumentParser:
     p_bc.add_argument("--root", required=True)
     p_bc.add_argument("--invocation", required=True)
     p_bc.set_defaults(func=_cmd_browser_collect)
+
+    p_sc = sub.add_parser("socket-collect", help="既存Claudeチャットの返答を照合し議事録へ回収する")
+    p_sc.add_argument("slug")
+    p_sc.add_argument("--root", required=True)
+    p_sc.add_argument("--invocation", required=True)
+    p_sc.set_defaults(func=_cmd_socket_collect)
 
     p_hs = sub.add_parser("handoff-status", help="搬出receiptと回収状態を読む")
     p_hs.add_argument("slug")

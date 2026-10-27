@@ -54,7 +54,9 @@ ai-roundtable close <slug> --verdict "結論" --root <root>
 Mac の handoff / handoff-status / followup / collect などは [Macの席への受渡し](docs/operations/mac-handoff.md) を参照。回収後に元担当へ結果を戻す手順は [担当への返却](docs/operations/coordinator-followup.md)。
 
 アプリのチャットを見ながら使う入口は[アプリで見える円卓の受渡し](docs/operations/app-first-seats.md)です。
-Claudeの入力準備と既存チャットへのリンクを提供します。Grokブラウザ経路は実験段階で、
+Claudeの既存チャットには `handoff --transport claude-socket --claude-session <UUID>` で
+画面操作なしに送信し、`socket-collect` で返答を検証・回収できます。表示用リンクとは別経路です。
+Grokブラウザ経路は実験段階で、
 有効な回答の実回収は未確認です。OrcaとGrok Botは別経路として後回しにしています。
 
 ## 目的と仕組み
@@ -147,7 +149,7 @@ Tier1 が失敗したら**自動で Tier3 に落ちる**（勝手に Tier2 へ�
 | Grok | Tier1（ACP）で意見の書き込みまで実測 |
 | Gemini | 未実装（Antigravity 経由の 3 経路を調査済み） |
 | CMUX上のCodex | Macの正式wrapperと通常CLIで実席往復・重複しない回収・元担当への返却を確認 |
-| Claude Desktop Code | Macの依頼固定・clipboard受渡し・回答回収を実装。指定実席の往復は接続障害により未確認 |
+| Claude Desktop Code | Macの既存実チャットへローカル通信で送信し、返答JSONの照合・議事録への一度だけの回収を確認。画面操作・新規ウィンドウなし。Windowsは未確認 |
 
 **司会を担う実行主体と、独立した意見を求める参加席は分けます。** これは製品名による除外ではなく役割の境界です。ホストは座長との会話を全部見ているので、
 「独立した参加者の意見」を出すと、司会が自分の望む結論を参加者の口から言わせるのと同じに
