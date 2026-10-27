@@ -53,13 +53,13 @@ def test_invalid_folders_are_rejected(folder):
         claude_new_link("相談", folder)
 
 
-@pytest.mark.parametrize("session_id", [SESSION, SESSION.upper(), "local_" + SESSION])
+@pytest.mark.parametrize("session_id", ["local_" + SESSION, "local_" + SESSION.upper()])
 def test_session_links_contain_only_the_canonical_uuid(session_id):
     assert claude_session_link(session_id) == f"claude://claude.ai/code/local_{SESSION}"
 
 
 @pytest.mark.parametrize("session_id", [
-    "", None, 123, "not-a-uuid", SESSION + "?q=inject", SESSION + "#fragment",
+    "", None, 123, SESSION, SESSION.upper(), "not-a-uuid", SESSION + "?q=inject", SESSION + "#fragment",
     SESSION + "/other", SESSION + "\x00", SESSION + "\n", SESSION + "\x7f",
     SESSION + "\x85", " " + SESSION, "{" + SESSION + "}",
     SESSION.replace("-", ""), "urn:uuid:" + SESSION,

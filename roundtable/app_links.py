@@ -25,13 +25,13 @@ def claude_new_link(prompt: str, folder: str | None = None) -> str:
 
 
 def claude_session_link(session_id: str) -> str:
-    if not isinstance(session_id, str) or _has_control(session_id):
-        raise ValueError("session_id must be a UUID or local_<UUID>")
+    if not isinstance(session_id, str) or _has_control(session_id) or not session_id.startswith("local_"):
+        raise ValueError("session_id must be a Desktop local_<UUID>, not a CLI UUID")
     value = session_id.removeprefix("local_")
     try:
         parsed = UUID(value)
     except ValueError as exc:
-        raise ValueError("session_id must be a UUID or local_<UUID>") from exc
+        raise ValueError("session_id must be a Desktop local_<UUID>") from exc
     if str(parsed) != value.lower():
         raise ValueError("session_id must use the hyphenated UUID format")
     return f"claude://claude.ai/code/local_{parsed}"
