@@ -15,10 +15,13 @@ Grokブラウザ、Grok Build CLI、Cursor経由は別経路です。Cursorの�
 公式の `claude://code/new?q=...` は新規入力欄を開きます。送信や回答完了を意味しません。
 `folder` を渡すと信頼確認が必ず発生するため、既定では渡しません。
 既存のチャットは、アプリ側の `local_UUID` を指定して開きます。CLI側のUUIDとは区別します。
+このリンクが同じアプリの同じウィンドウを再利用する保証はありません。
+2026-10-28に本人から「アプリが2つ起動した」と指摘があったため、チャット表示の成功を
+ウィンドウ再利用の成功へ読み替えません。既存画面への接続・再利用は別の未達条件です。
 
 ```bash
 ai-roundtable app-link --prompt-file request.md
-ai-roundtable app-link --session-id local_<UUID> --open
+ai-roundtable app-link --session-id local_<UUID>
 ```
 
 依頼の作成と、本文・スナップショット固定は既存のdispatchを使います。
@@ -31,6 +34,8 @@ ai-roundtable handoff-status <topic> --invocation <id> --root <root>
 ```
 
 `composer-ready` は入力準備です。入力欄とIDを確認してアプリ上で送信します。
+リンクの発行だけでは既存のアプリや画面を操作しません。明示的な `--open` はOSへ
+リンクを渡す操作であり、新しい画面が増える場合があるため、既存画面を再利用する用途では使いません。
 今回の実機試験では、Claudeアプリを前面化したうえでMac標準のキー入力を送りました。
 このキー入力は汎用の自動送信APIとして提供していません。別チャットへの誤送信を避けるため、
 前面化・入力先確認・送信・実会話への追加の確認を分けます。
