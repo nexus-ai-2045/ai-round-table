@@ -91,8 +91,9 @@ def test_claude_link_is_only_composer_not_execution(tmp_path, monkeypatch):
             return subprocess.CompletedProcess(args, 0, b"")
         return original(args, **kwargs)
     monkeypatch.setattr(handoff.subprocess, "run", run)
-    assert handoff.deliver(tp, inv)["state"] == "composer-ready"
-    assert calls[0][1].startswith("claude://code/new?q=")
+    assert handoff.deliver(tp, inv)["state"] == "composer-requested"
+    assert calls[0][1:3] == ["-b", "com.anthropic.claudefordesktop"]
+    assert calls[0][-1].startswith("claude://code/new?q=")
     assert handoff.deliver(tp, inv)["reason"] == "resend-forbidden"
     assert Journal.load(tp).data["invocations"][inv]["state"] != "merged"
 

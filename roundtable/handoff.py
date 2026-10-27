@@ -273,10 +273,10 @@ def deliver(tp: TopicPaths, inv_id: str, timeout_s=30) -> dict:
         _save(receipt, record)  # Durable before any possible clipboard/send side effect.
         try:
             if record["transport"] == "claude-link":
-                result = subprocess.run(["open", app_url], shell=False, capture_output=True,
+                result = subprocess.run(["open", "-b", "com.anthropic.claudefordesktop", app_url], shell=False, capture_output=True,
                                         timeout=timeout_s)
-                record.update(state="composer-ready" if result.returncode == 0 else "delivery-unknown",
-                              returncode=result.returncode, next_action="verify-composer-and-submit")
+                record.update(state="composer-requested" if result.returncode == 0 else "delivery-unknown",
+                              returncode=result.returncode, next_action="verify-existing-window-and-composer")
             elif record["transport"] == "grok-browser":
                 observed = browser_seat.send(*target, browser_prompt, record["browser_account"])
                 record.update(state="submitted", browser_submit=observed,

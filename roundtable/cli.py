@@ -415,8 +415,10 @@ def _cmd_app_link(args) -> int:
         if args.open:
             if sys.platform != "darwin":
                 raise ValueError("native opening currently supports macOS only")
-            subprocess.run(["open", url], check=True, capture_output=True, timeout=15)
-        print(json.dumps({"ok": True, "url": url, "opened": args.open, "submitted": False}, ensure_ascii=False))
+            subprocess.run(["open", "-b", "com.anthropic.claudefordesktop", url], check=True,
+                           capture_output=True, timeout=15)
+        print(json.dumps({"ok": True, "url": url, "open_requested": args.open,
+                          "window_reuse_verified": False, "submitted": False}, ensure_ascii=False))
         return 0
     except (ValueError, OSError, subprocess.SubprocessError):
         print(json.dumps({"ok": False, "reason": "app-link-invalid-or-open-failed"}))

@@ -34,7 +34,9 @@ ai-roundtable handoff <topic> --invocation <id> --transport claude-link --apply 
 ai-roundtable handoff-status <topic> --invocation <id> --root <root>
 ```
 
-`composer-ready` は入力準備です。入力欄とIDを確認してアプリ上で送信します。
+`composer-requested` はOSへ入力準備を依頼した状態です。画面表示の確認ではありません。
+`app-link --open` も `open_requested` だけを返し、`window_reuse_verified` はfalseです。
+入力欄とIDを確認してアプリ上で送信します。
 リンクの発行だけでは既存のアプリや画面を操作しません。明示的な `--open` はOSへ
 リンクを渡す操作であり、新しい画面が増える場合があるため、既存画面を再利用する用途では使いません。
 今回の実機試験では、Claudeアプリを前面化したうえでMac標準のキー入力を送りました。
