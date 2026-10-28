@@ -1,7 +1,8 @@
 # Macの席への依頼受渡し
 
 Mac先行の実装対象は、依頼の固定、CMUXの既存搬送への接続、Claude Desktop Codeへの
-クリップボード受渡し、回答回収です。Desktopの非公開APIを想定した自動送信は実装しません。
+クリップボード受渡し、回答回収です。加えて、既存`Desktop`チャットを明示する実験的な
+`claude-socket` 搬送を用意します。既存の`CMUX`・`clipboard`経路はそのまま使えます。
 
 ## 設計の不変条件
 
@@ -65,6 +66,57 @@ ai-roundtable cancel TOPIC --invocation INV --root ROOT
 
 搬出失敗を新規invocationの自動発行やTier3への自動縮退で隠しません。
 送達不明の場合は同じinvocationで回収を確認し、席への再送を繰り返しません。
+
+## `Claude socket`による既存チャットへの受渡し
+
+対象は`macOS/Linux`の同一`OS`ユーザー（`UID`）で稼働する、既存の`Claude Desktop Code`チャットです。
+`Windows`の`named pipe`、別端末、新規チャット作成は非対応です。
+画面操作、新規ウィンドウ、クリップボードは使いません。
+セッション`UUID`を明示し、レジストリの `claude-desktop`、`PID`とプロセス開始時刻、
+`socket`と会話記録の所有者・`device/inode`を照合します。送信直前・回収時にも再照合します。
+認証・受信制御・設定・セキュリティポリシーを変更して通す処理はありません。
+
+`ROOT` は議事録を保存する絶対パスです。既存の対象チャットの`UUID`を `SESSION_UUID`
+に指定します（`local_` 接頭辞は付けません）。`dispatch`の結果を `INV` に使います。
+
+```bash
+ai-roundtable new-topic TOPIC --topic '議題' --participants claude --root ROOT
+ai-roundtable dispatch TOPIC --participant claude --tier 3 --async --no-clipboard --root ROOT
+ai-roundtable handoff TOPIC --invocation INV --transport claude-socket \
+  --claude-session SESSION_UUID --root ROOT
+# 準備結果を確認してから、同じ宛先へ一度だけ送信
+ai-roundtable handoff TOPIC --invocation INV --transport claude-socket \
+  --claude-session SESSION_UUID --apply --root ROOT
+ai-roundtable handoff-status TOPIC --invocation INV --root ROOT
+ai-roundtable socket-collect TOPIC --invocation INV --root ROOT
+# answer-observed の後、同じ回答が安定していることをもう一度照合
+ai-roundtable socket-collect TOPIC --invocation INV --root ROOT
+```
+
+`--apply` のない`handoff`はローカル準備だけです。送信前に `sending` と宛先を保存し、
+送信後の `submitted` は通信フレームを書いた状態を示します。受信・回答完成の証明ではなく、
+照合した回答がない間は `ok=false`、`model_receipt_verified=false` です。
+拒否・中断・送達不明でも同じ`invocation`は再送しません。
+宛先解決など送信前の失敗で `prepared` のままなら、原因の解消後に送信できます。
+
+回収は送信後の対象会話記録にある依頼番号・メッセージ番号・参加者と、
+最終返答の`JSON/schema`を照合します。初回は `answer-observed` として保留し、
+回答の`UUID`と本文`hash`が続けて一致した時だけ既存の`collector`で議事録へ取り込みます。
+`answer-observed` の `ok=false` は回収未完了を示します。
+再回収は `already_collected` を返し、議事録を重複更新しません。
+別入力の割込み、取消、未知の会話記録や不完全な返答は未回収のままです。
+待機中は `socket-collect` を再実行し、`handoff --apply` は繰り返しません。
+
+送るのは固定済みの役割指定と議事録本文のプレーンテキストです。
+ファイル・画像添付は扱いません。`JSON`を含む送信フレーム全体は1 `MiB`、
+回収する会話記録の増分は8 `MiB`、レジストリ1件は64 `KiB`までです。
+相手アプリ側の受信・容量制限も受け、超過時に分割・再送する処理はありません。
+`NDJSON`通信と会話記録の形式は安定した公開`API`として保証されない実験的な互換形式です。
+変更や照合不一致を検出した場合は、成功扱いせず停止します。
+
+既存の`Mac`実機スモークでは3件の`invocation`で送信・返答`JSON`の照合・議事録回収を確認しています。
+これはその3依頼の観測で、今回の変更で実機送信を再実行した記録ではありません。
+`Linux`の実席往復、常設の自動継続、すべての`Desktop`バージョンでの互換性は未確認です。
 
 ## Desktopの担当再開
 
