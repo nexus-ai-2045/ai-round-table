@@ -301,6 +301,25 @@ def test_native_stop_hook_rejection_waits_for_corrected_final(seat):
     assert result['response_uuid'] == final['uuid']
 
 
+@pytest.mark.parametrize('meta,text', [(True, 'Stop hook feedback:\nrejected'),
+                                     (False, 'Unrelated new user input')])
+def test_growth_during_final_validation_defers_collection(seat, monkeypatch, meta, text):
+    request(seat)
+    answer(seat)
+    original = transport.revalidate_target
+    calls = 0
+    def validate(target):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            write_record(seat, dict(type='user', sessionId=SESSION, isMeta=meta,
+                                   message=dict(role='user', content=text)))
+        return original(target)
+    monkeypatch.setattr(transport, 'revalidate_target', validate)
+    assert transport.reply(seat['target'], INV, 'claude') is None
+    assert calls == 2
+
+
 def test_non_json_answer_does_not_hide_hook_corrected_json(seat):
     request(seat)
     answer(seat, message=dict(role='assistant', stop_reason='end_turn',

@@ -295,7 +295,8 @@ def reply(target, invocation_id, participant):
                     and result.get('participant') == participant):
                 candidate = dict(text=json.dumps(result, ensure_ascii=False),
                                  response_uuid=response_uuid, session_id=target['session_id'])
-        revalidate_target(target)
+        if revalidate_target(target)['transcript_offset'] != current['transcript_offset']:
+            return None
         return candidate
     except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError):
         return None
