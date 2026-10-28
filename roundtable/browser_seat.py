@@ -124,9 +124,11 @@ def reply(window: int, tab: int, invocation: str, account: str) -> dict:
     })())""")
 
 
-def build_prompt(invocation: str, participant: str, snapshot: str) -> str:
+def build_prompt(invocation: str, participant: str, snapshot: str, *, assignment: str = "") -> str:
     return (f"[roundtable invocation: {invocation}]\n"
-            f"あなたはAI Round Tableの参加者 {participant} です。下記議事録への独立した意見を日本語で返してください。\n"
+            + (assignment if assignment else
+               f"あなたはAI Round Tableの参加者 {participant} です。下記議事録への独立した意見を日本語で返してください。\n")
+            +
             "ブラウザのためローカルファイルを読んだり書いたりする必要はありません。外部操作や検索は不要です。\n"
             "返答は次の形式のJSONオブジェクト1個だけ（コードフェンス不要）。claimsは1件以上、根拠のない断定は禁止。\n"
             + json.dumps({"invocation_id": invocation, "participant": participant,

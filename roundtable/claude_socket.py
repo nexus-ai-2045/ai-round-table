@@ -287,7 +287,10 @@ def reply(target, invocation_id, participant):
                 text = text[4:-4]
             if invocation_id not in text:
                 continue
-            result = json.loads(text)
+            try:
+                result = json.loads(text)
+            except json.JSONDecodeError:
+                continue  # A native output hook can reject this answer and request a correction.
             if (isinstance(result, dict) and result.get('invocation_id') == invocation_id
                     and result.get('participant') == participant):
                 candidate = dict(text=json.dumps(result, ensure_ascii=False),

@@ -33,6 +33,15 @@ def build(tp: TopicPaths, participant: str, inv_id: str, role_hint: str = "",
     )
 
 
+def captured_assignment(tp: TopicPaths, participant: str, inv_id: str, text: str,
+                        snapshot_path: Path) -> str:
+    """Extract the frozen assignment only after validating its legacy instruction tail."""
+    tail = build(tp, participant, inv_id, snapshot_path=snapshot_path).split("\n", 2)[2]
+    if not text.endswith(tail):
+        raise ValueError("packet instruction block does not match generated template")
+    return text[:-len(tail)]
+
+
 def clipboard_command() -> tuple[str, str, str]:
     """搬出と事前確認で共有するOS別のコマンド・文字コード・接頭文字。"""
     system = platform.system()

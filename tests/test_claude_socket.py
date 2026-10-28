@@ -249,6 +249,17 @@ def test_native_stop_hook_rejection_waits_for_corrected_final(seat):
     assert result['response_uuid'] == final['uuid']
 
 
+def test_non_json_answer_does_not_hide_hook_corrected_json(seat):
+    request(seat)
+    answer(seat, message=dict(role='assistant', stop_reason='end_turn',
+                             content=f'Prose for invocation {INV}, not a JSON response'))
+    write_record(seat, dict(type='user', sessionId=SESSION, isMeta=True,
+        message=dict(role='user', content='Stop hook feedback:\ninvalid output')))
+    assert transport.reply(seat['target'], INV, 'claude') is None
+    final = answer(seat)
+    assert transport.reply(seat['target'], INV, 'claude')['response_uuid'] == final['uuid']
+
+
 def queued_request(seat, prompt=None, kind='peer'):
     write_record(seat, dict(type='attachment', sessionId=SESSION, attachment=dict(
         type='queued_command', prompt=prompt or f'{MARKER} {INV}', origin=dict(kind=kind))))
