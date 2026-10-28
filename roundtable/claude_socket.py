@@ -11,6 +11,14 @@ import time
 import uuid
 MAX_BYTES = 8 * 1024 * 1024
 MAX_FRAME_BYTES = 1024 * 1024
+_PASSIVE_ATTACHMENTS = frozenset({
+    'hook_success', 'hook_cancelled', 'hook_additional_context', 'hook_blocking_error',
+    'hook_system_message', 'environment', 'model', 'language', 'deferred_tools_delta',
+    'agent_listing_delta', 'mcp_instructions_delta', 'skill_listing', 'auto_mode',
+    'instructions', 'session_context', 'date', 'credential_org', 'remote_session_change',
+    'prompt_snapshot', 'silent_turn_reminder', 'nested_memory', 'diagnostics',
+    'edited_text_file', 'deferred_tools_record',
+})
 def _uuid(value):
     if not isinstance(value, str) or str(uuid.UUID(value)) != value:
         raise ValueError("explicit canonical UUID required")
@@ -196,6 +204,28 @@ def reply(target, invocation_id, participant):
             record = json.loads(line)
             if not isinstance(record, dict):
                 return None
+            if record.get('type') == 'attachment':
+                attachment = record.get('attachment', {})
+                if record.get('sessionId') != target['session_id']:
+                    return None
+                if not isinstance(attachment, dict):
+                    return None
+                if isinstance(attachment, dict) and attachment.get('type') == 'queued_command':
+                    if record.get('sessionId') != target['session_id']:
+                        return None
+                    prompt = attachment.get('prompt', '')
+                    if not isinstance(prompt, str):
+                        return None
+                    origin = attachment.get('origin', {})
+                    if (not active and isinstance(origin, dict) and origin.get('kind') == 'peer'
+                            and prompt.count(marker) == 1 and invocation_id in prompt
+                            and re.search(r'(?<![\w-])' + re.escape(marker) + r'(?![\w-])', prompt)):
+                        active = True
+                    elif active:
+                        return None
+                elif active and attachment.get('type') not in _PASSIVE_ATTACHMENTS:
+                    return None
+                continue
             if record.get('type') not in ('user', 'assistant'):
                 continue
             if record.get('sessionId') != target['session_id']:
@@ -205,6 +235,11 @@ def reply(target, invocation_id, participant):
                 return None
             text = _text(message)
             if record.get('type') == 'user':
+                content = message.get('content')
+                if (isinstance(content, list) and content
+                        and all(isinstance(item, dict) and item.get('type') == 'tool_result'
+                                for item in content)):
+                    continue
                 if (active and record.get('isMeta') is True
                         and text.startswith('Stop hook feedback:\n')):
                     # The native output gate rejected the previous answer.
@@ -223,7 +258,8 @@ def reply(target, invocation_id, participant):
             candidate = None
             if any(item.get('type') == 'tool_use' for item in message.get('content', [])
                    if isinstance(item, dict)) or message.get('stop_reason') == 'tool_use':
-                return None
+                pending_id, pending_text = None, ''
+                continue  # A busy session may finish its existing tools before replying.
             api_id = message.get('id')
             if not isinstance(api_id, str) or not api_id.strip():
                 api_id = None
@@ -249,6 +285,8 @@ def reply(target, invocation_id, participant):
                 text = text[8:-4]
             elif text.startswith('```\n') and text.endswith('\n```'):
                 text = text[4:-4]
+            if invocation_id not in text:
+                continue
             result = json.loads(text)
             if (isinstance(result, dict) and result.get('invocation_id') == invocation_id
                     and result.get('participant') == participant):

@@ -249,6 +249,40 @@ def test_native_stop_hook_rejection_waits_for_corrected_final(seat):
     assert result['response_uuid'] == final['uuid']
 
 
+def queued_request(seat, prompt=None, kind='peer'):
+    write_record(seat, dict(type='attachment', sessionId=SESSION, attachment=dict(
+        type='queued_command', prompt=prompt or f'{MARKER} {INV}', origin=dict(kind=kind))))
+
+
+def test_busy_session_queued_attachment_then_existing_work_then_answer(seat):
+    queued_request(seat)
+    answer(seat, message=dict(role='assistant', stop_reason='tool_use',
+                             content=[dict(type='tool_use', id='existing-task-tool')]))
+    write_record(seat, dict(type='user', sessionId=SESSION, message=dict(role='user',
+        content=[dict(type='tool_result', tool_use_id='existing-task-tool', content='existing work result')])))
+    answer(seat, message=dict(role='assistant', stop_reason='end_turn', content='Existing work finished'))
+    final = answer(seat)
+    assert transport.reply(seat['target'], INV, 'claude')['response_uuid'] == final['uuid']
+
+
+@pytest.mark.parametrize('kind', ['peer', 'user'])
+def test_new_queued_input_after_our_request_stays_ambiguous(seat, kind):
+    queued_request(seat)
+    queued_request(seat, 'unrelated input', kind)
+    answer(seat)
+    assert transport.reply(seat['target'], INV, 'claude') is None
+
+
+@pytest.mark.parametrize('kind,session', [('future_input_type', SESSION),
+                                         ('hook_success', OTHER)])
+def test_unknown_or_foreign_session_attachment_fails_closed(seat, kind, session):
+    request(seat)
+    answer(seat)
+    write_record(seat, dict(type='attachment', sessionId=session, attachment=dict(type=kind)))
+    answer(seat)
+    assert transport.reply(seat['target'], INV, 'claude') is None
+
+
 @pytest.mark.parametrize('meta,text', [(False, 'Stop hook feedback:\ntext'),
                                      (True, 'Another Claude session sent a message: text')])
 def test_unrelated_user_or_peer_is_never_treated_as_hook_feedback(seat, meta, text):
