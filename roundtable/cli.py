@@ -351,10 +351,11 @@ def _cmd_handoff(args) -> int:
             tp, args.invocation, transport=args.transport,
             workspace=args.workspace, surface=args.surface,
             script=Path(args.cmux_script) if args.cmux_script else None,
+            claude_session=getattr(args, "claude_session", None),
         )
         if args.apply and result.get("ok"):
             result = handoff.deliver(tp, args.invocation, timeout_s=args.timeout)
-    except (ValueError, OSError) as exc:
+    except (ValueError, OSError, RuntimeError) as exc:
         result = {"ok": False, "reason": "handoff-invalid", "detail": str(exc)}
     payload = {**result, "invocation": args.invocation,
                "exit_code": 0 if result.get("ok") else 1}
@@ -396,6 +397,21 @@ def _cmd_followup(args) -> int:
         result = {"ok": False, "reason": "followup-invalid", "detail": str(exc)}
     print(json.dumps(result, ensure_ascii=False, indent=1))
     return 0 if result.get("ok") else 1
+
+
+def _cmd_socket_collect(args) -> int:
+    from . import handoff
+    if not (topic_dir(Path(args.root), args.slug) / "minutes.md").is_file():
+        print(json.dumps({"ok": False, "reason": "unknown-topic"}))
+        return 2
+    tp = ensure_topic(Path(args.root), args.slug)
+    try:
+        result = handoff.collect_socket(tp, args.invocation)
+    except (ValueError, OSError, RuntimeError) as exc:
+        result = {"ok": False, "reason": "socket-collect-failed", "detail": str(exc)}
+    _write_last_result(tp, result)
+    print(json.dumps(result, ensure_ascii=False, indent=1))
+    return 0 if result.get("ok") or result.get("state") == "merged" else 1
 
 
 def _cmd_handoff_status(args) -> int:
@@ -664,13 +680,20 @@ def _build_parser() -> argparse.ArgumentParser:
     p_ho.add_argument("slug")
     p_ho.add_argument("--root", required=True)
     p_ho.add_argument("--invocation", required=True)
-    p_ho.add_argument("--transport", choices=("cmux", "claude-desktop"), required=True)
+    p_ho.add_argument("--transport", choices=("cmux", "claude-desktop", "claude-socket"), required=True)
+    p_ho.add_argument("--claude-session", help="既存Claude DesktopのセッションUUID（local_接頭辞なし）")
     p_ho.add_argument("--workspace", help="CMUX workspace UUID")
     p_ho.add_argument("--surface", help="CMUX surface UUID")
     p_ho.add_argument("--cmux-script", help="既存cmux_file_signal.pyの絶対パス")
     p_ho.add_argument("--apply", action="store_true", help="固定した依頼を選択済み搬送へ渡す")
     p_ho.add_argument("--timeout", type=_positive_seconds, default=30.0)
     p_ho.set_defaults(func=_cmd_handoff)
+
+    p_sc = sub.add_parser("socket-collect", help="既存Claudeチャットの返答を照合し議事録へ回収する")
+    p_sc.add_argument("slug")
+    p_sc.add_argument("--root", required=True)
+    p_sc.add_argument("--invocation", required=True)
+    p_sc.set_defaults(func=_cmd_socket_collect)
 
     p_hs = sub.add_parser("handoff-status", help="搬出receiptと回収状態を読む")
     p_hs.add_argument("slug")
