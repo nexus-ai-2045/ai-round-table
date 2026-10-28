@@ -45,7 +45,7 @@ def test_delivery_keeps_frozen_hint_and_inlines_snapshot(tmp_path, monkeypatch):
     participant = "claude"
     tp, inv, captured = prepared_topic(tmp_path)
     snapshot = handoff._paths(tp, inv)[1]
-    frozen_snapshot = snapshot.read_text()
+    frozen_snapshot = snapshot.read_text(encoding="utf-8")
     prompts = []
     monkeypatch.setattr(claude_socket, "resolve_target", lambda sid: {"session_id": sid})
     def send(target, prompt, message_id):
