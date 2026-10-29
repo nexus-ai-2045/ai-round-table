@@ -515,3 +515,61 @@ def test_cannot_borrow_text_across_api_messages(seat):
     answer(seat, message=dict(role='assistant', id='b', stop_reason=None, content=[]))
     answer(seat, message=dict(role='assistant', id='a', stop_reason='end_turn', content=[]))
     assert transport.reply(seat['target'], INV, 'claude') is None
+
+
+def test_issue_receipt_is_private_one_shot_and_bound(seat):
+    marker = 'cc-msg-' + 'a' * 32
+    path = Path(transport.issue_receipt(seat['target'], INV, 'claude', marker, now=1000))
+    assert path == seat['config'] / 'runtime' / 'roundtable-requests' / f'{marker}.json'
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert path.parent.stat().st_mode & 0o777 == 0o700
+    body = json.loads(path.read_text(encoding='utf-8'))
+    assert body == dict(schema='roundtable-request-receipt/v1', message_id=marker,
+                        session_id=SESSION, invocation_id=INV, participant='claude',
+                        sender_pid=os.getpid(), issued_at=1000,
+                        expires_at=1000 + transport.RECEIPT_TTL_SECONDS)
+    with pytest.raises(FileExistsError):
+        transport.issue_receipt(seat['target'], INV, 'claude', marker)
+
+
+@pytest.mark.parametrize('field,value', [('message_id', 'cc-msg-short'), ('message_id', MARKER),
+                                         ('invocation_id', 'not-hex'), ('participant', ''),
+                                         ('config_dir', None)])
+def test_issue_receipt_rejects_invalid_input(seat, field, value):
+    target = dict(seat['target'])
+    args = dict(invocation_id=INV, participant='claude', message_id='cc-msg-' + 'b' * 32)
+    if field == 'config_dir':
+        target.pop('config_dir')
+    else:
+        args[field] = value
+    with pytest.raises(ValueError):
+        transport.issue_receipt(target, **args)
+    root = seat['config'] / 'runtime' / 'roundtable-requests'
+    assert not root.exists() or not any(root.iterdir())
+
+
+def test_issue_receipt_refuses_unsafe_directory(seat):
+    root = seat['config'] / 'runtime' / 'roundtable-requests'
+    root.mkdir(parents=True)
+    root.chmod(0o777)
+    with pytest.raises(ValueError):
+        transport.issue_receipt(seat['target'], INV, 'claude', 'cc-msg-' + 'c' * 32)
+    assert not any(root.iterdir())
+
+
+def test_issue_receipt_prunes_only_expired_receipt_files(seat):
+    root = seat['config'] / 'runtime' / 'roundtable-requests'
+    root.mkdir(parents=True, mode=0o700)
+    old_receipt = root / ('cc-msg-' + 'd' * 32 + '.json')
+    old_consumed = root / ('cc-msg-' + 'd' * 32 + '.consumed')
+    fresh = root / ('cc-msg-' + 'e' * 32 + '.json')
+    unrelated = root / 'notes.txt'
+    for path in (old_receipt, old_consumed, fresh, unrelated):
+        path.write_text('{}', encoding='utf-8')
+    stale = 10_000 - transport.RECEIPT_TTL_SECONDS - 1
+    for path in (old_receipt, old_consumed, unrelated):
+        os.utime(path, (stale, stale))
+    os.utime(fresh, (10_000, 10_000))
+    transport.issue_receipt(seat['target'], INV, 'claude', 'cc-msg-' + 'f' * 32, now=10_000)
+    assert not old_receipt.exists() and not old_consumed.exists()
+    assert fresh.exists() and unrelated.exists()
