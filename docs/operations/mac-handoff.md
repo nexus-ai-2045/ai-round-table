@@ -118,6 +118,40 @@ ai-roundtable socket-collect TOPIC --invocation INV --root ROOT
 これはその3依頼の観測で、今回の変更で実機送信を再実行した記録ではありません。
 `Linux`の実席往復、常設の自動継続、すべての`Desktop`バージョンでの互換性は未確認です。
 
+## 作業範囲を固定した実装依頼
+
+コードの実装を依頼する場合は、通常のレビュー依頼と分けて、`handoff`に
+`--implementation-manifest <workflow.json>`を明示します。対象は`claude-socket`のみです。
+新しい契約を作らず、[既存の実装開始・結果回収契約](../REVIEW_TO_IMPLEMENTATION.md)の
+`roundtable.review-to-implementation/v1`を使います。
+
+```bash
+ai-roundtable handoff TOPIC --root ROOT --invocation INV \
+  --transport claude-socket --claude-session SESSION_UUID \
+  --implementation-manifest workflow.json
+```
+
+実装前に、同じ基準コミットに対するレビュー、作業ツリー・ブランチ・担当者・所有ファイル、
+許可操作と禁止操作を検証します。準備した契約を固定し、送信直前にも照合します。
+検証に失敗した契約を、レビュー依頼や別の送信先へ自動的に切り替えません。
+この指定がない場合のレビュー用の動作は変えません。
+
+相手側の権限や確認待ちはそのまま有効です。別のエージェントから届いた依頼で、
+権限設定の変更や確認待ちの承認を代行できるわけではありません。
+許可された範囲で既存コードを確認し、不足分だけを実装・テストした結果を、既存の回答形式で返します。
+
+`socket-collect`で回答が`merged`になっても、実装完了の証明ではありません。
+依頼元が実際の変更・コミット・テスト結果を独立して確認し、既存の
+`workflow-gate --phase fan-in`を通してから実装結果を受け入れます。
+テスト失敗・承認待ち・未コミット・所有範囲外の変更を成功扱いにしません。
+
+受信側でローカルコミットを毎回確認する設定がある場合、契約に`commit`が含まれていても
+アプリ自身の確認は省略されません。「今回許可」は次の依頼への恒久許可ではありません。
+確認回数の見直しは、送信側の契約変更とは別に、受信側の既存権限設定を対象とします。
+
+並列に回帰試験を実行する場合は、それぞれ異なる`--basetemp=.pytest-tmp-<用途>`を指定します。
+既定の一時ディレクトリを共有すると、互いの試験用ファイルを消して誤失敗になります。
+
 ## Desktopの担当再開
 
 [Claude公式資料](https://code.claude.com/docs/en/desktop#work-across-sessions)は
