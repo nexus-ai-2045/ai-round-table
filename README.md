@@ -3,7 +3,7 @@
 **人間が座長を務める、マルチ AI 円卓のディスパッチャ。**
 
 [![CI](https://github.com/nexus-ai-2045/ai-round-table/actions/workflows/test.yml/badge.svg)](https://github.com/nexus-ai-2045/ai-round-table/actions/workflows/test.yml)
-[![version](https://img.shields.io/badge/version-0.3.0-blue)](https://github.com/nexus-ai-2045/ai-round-table)
+[![version](https://img.shields.io/badge/version-0.4.0-blue)](https://github.com/nexus-ai-2045/ai-round-table)
 [![Python](https://img.shields.io/badge/python-3.13%2B-blue)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
