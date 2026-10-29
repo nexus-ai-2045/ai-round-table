@@ -244,6 +244,8 @@ def deliver(tp: TopicPaths, inv_id: str, timeout_s=30) -> dict:
             socket_prompt = _socket_prompt(inv_id, record["participant"],
                                             ledger.read_state(snapshot).decode("utf-8"),
                                             record["message_id"], assignment=assignment)
+            record["request_receipt"] = claude_socket.issue_receipt(
+                target, inv_id, record["participant"], record["message_id"])
         elif record["transport"] == "cmux":
             script = _script(record["script"])
             preflight = _cmux_preflight(script, timeout_s)
