@@ -172,7 +172,8 @@ Mac優先・残実装GOに基づき、`handoff` / `handoff-status`を追加し�
 
 - `dispatch --no-clipboard --async`で発行し、`handoff`で既存席に結び付けます。
 - 既定は準備だけです。`--apply`は指定した搬送の実行です。無指定の席や新規AIを起動しません。
-- CMUXはworkspace/surface UUIDを明示し、既存file-signal wrapperを使用します。
+- `CMUX`搬送は廃止しました。コマンドで選択できず、旧受領記録からの送信も`transport-retired`で止めます。過去の`CMUX`手順は履歴として扱います。
+- `Claude`の既存アプリ席には`claude-socket`で送り、`socket-collect`で返答を照合します。`Codex`の既存アプリ席には従来の中継を使います。
 - Claude Desktop Codeはクリップボードへの搬出までです。画面への貼付・送信の確認は別です。
 - `submitted` / `clipboard-ready`は議事録merge・担当再開・採用成功を意味しません。
 - 依頼とsnapshotをinvocationごとに固定します。送達不明は再送せず、同じinvocationを回収します。

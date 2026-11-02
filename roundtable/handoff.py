@@ -11,7 +11,6 @@ import math
 import shutil
 from pathlib import Path
 import subprocess
-import sys
 import uuid
 
 from . import ledger, minutes, packet
@@ -19,8 +18,7 @@ from .journal import Journal
 from .paths import TopicPaths
 from .watcher import _invocation_lock
 
-_PROCESSES = {name: name for name in ("codex", "claude", "gemini", "grok")}
-_PROCESSES.update({"cc": "claude", "claude-code": "claude"})
+_CLAUDE_PARTICIPANTS = {"claude", "cc", "claude-code"}
 
 
 def _paths(tp, inv):
@@ -76,16 +74,6 @@ def _verify(record, request, snapshot):
             raise ValueError(f"handoff artifact hash mismatch: {key}")
         verified[key] = raw
     return verified["packet_sha256"]
-
-
-def _script(value):
-    path = Path(value) if value else Path()
-    if not path.is_absolute() or path.name != "cmux_file_signal.py" or not path.is_file():
-        raise ValueError("script must be an existing absolute cmux_file_signal.py path")
-    resolved = path.resolve()
-    if resolved.name != "cmux_file_signal.py":
-        raise ValueError("resolved script must be named cmux_file_signal.py")
-    return str(resolved)
 
 
 def _capture_request(tp, inv_id, text):
@@ -188,27 +176,21 @@ def _freeze_implementation(path):
     return binding
 
 
-def prepare(tp: TopicPaths, inv_id: str, transport="cmux", workspace=None,
+def prepare(tp: TopicPaths, inv_id: str, transport="claude-socket", workspace=None,
             surface=None, script=None, claude_session=None, implementation_manifest=None) -> dict:
     """Persist an immutable packet/snapshot and bind an explicit destination."""
+    if transport == "cmux":
+        raise ValueError("cmux transport is retired; handoff requires claude-socket or claude-desktop")
     with _invocation_lock(tp, inv_id):
         rec = Journal.load(tp).data["invocations"].get(inv_id)
         if rec is None:
             return {"ok": False, "reason": "unknown-invocation"}
         if implementation_manifest is not None and transport != "claude-socket":
             raise ValueError("implementation manifest requires claude-socket")
-        if transport == "cmux":
-            if not workspace or not surface:
-                raise ValueError("explicit workspace and surface UUIDs required")
-            workspace, surface = str(uuid.UUID(str(workspace))), str(uuid.UUID(str(surface)))
-            script = _script(script)
-            process = _PROCESSES.get(rec["participant"])
-            if process is None:
-                raise ValueError("participant has no supported cmux process mapping")
-        elif transport in {"claude-desktop", "claude-socket"}:
+        if transport in {"claude-desktop", "claude-socket"}:
             if workspace is not None or surface is not None or script is not None:
-                raise ValueError("claude-desktop does not accept cmux destination options")
-            if _PROCESSES.get(rec["participant"]) != "claude":
+                raise ValueError("app handoff does not accept retired cmux destination options")
+            if rec["participant"] not in _CLAUDE_PARTICIPANTS:
                 raise ValueError("claude-desktop requires participant claude")
             process = None
         else:
@@ -279,25 +261,6 @@ def status(tp: TopicPaths, inv_id: str) -> dict:
         return _result(record)
 
 
-def _cmux_preflight(script: str, timeout_s: float) -> dict | None:
-    """送信しない起動検査。正式wrapperのargparse --helpはmain処理前に終了する。"""
-    if shutil.which("cmux") is None:
-        return {"reason": "cmux-preflight-failed", "preflight_error": "cmux-not-on-path"}
-    try:
-        result = subprocess.run([sys.executable, script, "--help"], shell=False,
-                                capture_output=True, timeout=timeout_s)
-    except (OSError, subprocess.SubprocessError) as exc:
-        stderr = getattr(exc, "stderr", None) or b""
-        if isinstance(stderr, str):
-            stderr = stderr.encode("utf-8")
-        return {"reason": "cmux-preflight-failed", "preflight_error": type(exc).__name__,
-                "stderr_sha256": _hash(stderr)}
-    if result.returncode != 0:
-        return {"reason": "cmux-preflight-failed", "preflight_error": "wrapper-startup-failed",
-                "returncode": result.returncode, "stderr_sha256": _hash(result.stderr or b"")}
-    return None
-
-
 def deliver(tp: TopicPaths, inv_id: str, timeout_s=30) -> dict:
     """Explicit one-shot delivery. Every uncertain outcome permanently blocks resend."""
     if not math.isfinite(timeout_s) or timeout_s <= 0:
@@ -307,6 +270,10 @@ def deliver(tp: TopicPaths, inv_id: str, timeout_s=30) -> dict:
         record = _read(receipt)
         if record is None:
             return {"ok": False, "reason": "handoff-not-prepared"}
+        if record["transport"] == "cmux":
+            return _result(record, ok=False, reason="transport-retired")
+        if record["transport"] not in {"claude-desktop", "claude-socket"}:
+            return _result(record, ok=False, reason="unsupported-handoff-transport")
         verified_packet = _verify(record, request, snapshot)
         if record["state"] != "prepared":
             return _result(record, ok=False, reason="resend-forbidden",
@@ -331,15 +298,6 @@ def deliver(tp: TopicPaths, inv_id: str, timeout_s=30) -> dict:
                                             implementation=implementation)
             if implementation is not None:
                 _validate_implementation(record["implementation"])
-        elif record["transport"] == "cmux":
-            script = _script(record["script"])
-            preflight = _cmux_preflight(script, timeout_s)
-            if preflight is not None:
-                return _result(record, ok=False, **preflight)
-            args = [sys.executable, script, "--message-file", str(request.resolve()),
-                    "--workspace", record["workspace"], "--surface", record["surface"],
-                    "--path-only", "--no-control-block", "--mode", "pointer", "--transport", "file",
-                    "--require-process", record["require_process"], "--verify-submit", "--verify-submit-json"]
         else:
             try:
                 command, _, _ = packet.clipboard_command()
@@ -360,13 +318,6 @@ def deliver(tp: TopicPaths, inv_id: str, timeout_s=30) -> dict:
             elif record["transport"] == "claude-desktop":
                 packet.to_clipboard(verified_packet.decode("utf-8"), timeout_s=timeout_s)
                 record.update(state="clipboard-ready", next_action="human-paste-required")
-            else:
-                result = subprocess.run(args, shell=False, capture_output=True,
-                                        timeout=timeout_s)
-                record.update(state="submitted" if result.returncode == 0 else "delivery-unknown",
-                              returncode=result.returncode,
-                              # Output can contain private screen text. Keep only a digest.
-                              transport_output_sha256=_hash(result.stdout or b""))
         except (OSError, subprocess.SubprocessError, NotImplementedError, RuntimeError, ValueError) as exc:
             record.update(state="delivery-unknown", reason=type(exc).__name__)
         _save(receipt, record)
