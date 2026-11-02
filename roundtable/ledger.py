@@ -81,7 +81,7 @@ def work_tree_root(path: Path) -> Path | None:
     GitHub の windows runner は TEMP が `<WIN_TEMP>\\...` で、
     `resolve()` はこれを `runneradmin` へ展開する)。綴りが割れると
     ensure_git_root の `top == root` が同じ場所を指していても不成立になり、
-    **既存 repo の中にネスト repo を init する** (D13 が禁じている状態)。
+    **既存 repo を別の場所と誤認する**。
     入口と出口を同じ正規形に揃えることでしか防げない。
     """
     r = _git(Path(path).resolve(), "rev-parse", "--show-toplevel")
@@ -91,12 +91,11 @@ def work_tree_root(path: Path) -> Path | None:
 
 
 def ensure_git_root(root: Path) -> Path:
-    """root が git 管理下であることを保証する (D13)。
+    """root 自体が git work tree の最上位であることを保証する (D13)。
 
-    既存の work tree に入っていればそれを使う (実運用: 本 repo の minutes/)。
-    どの repo にも属さない場合だけ init する (テスト・独立運用)。
-    ネスト repo を作らないのは、証跡が二重管理になり「どちらの履歴が正か」で
-    witness 層と同じ曖昧さが再発するため。
+    既存の root 専用 repo は再利用し、どの repo にも属さなければ init する。
+    root より上の repo を暗黙に流用すると、その index と履歴へ書き込むため拒否する。
+    必要なら利用者が専用 repo を明示的に初期化してから再実行する。
 
     例外: enclosing repo で **root 自体が gitignore されている**場合は、その repo に
     とって存在しないのと同じ (add できず証跡にならない)。この場合だけ root に
@@ -110,7 +109,11 @@ def ensure_git_root(root: Path) -> Path:
     if top == root:
         return root
     if top is not None and not _ignored_by(top, root):
-        return top
+        raise LedgerError(
+            f"議事録 root が別の git work tree 内にある (D13): {root}; "
+            f"親 repo: {top}. 専用の git root を指定するか、"
+            "root 自体を git init してから再実行すること"
+        )
     r = _git(root, "init", "-q")
     if r.returncode != 0:
         raise LedgerError(f"git init 失敗: {root}: {r.stderr.strip()}")
@@ -132,16 +135,29 @@ def _ignored_by(top: Path, path: Path) -> bool:
 
 
 def require_root(path: Path) -> Path:
-    """path が git 管理下であることを要求する (読み書き経路の D13 detector)。
+    """専用 root またはその minutes/<slug> 配下を要求する (D13 detector)。
 
     ensure_git_root と違い **init しない**。議事録が git 外に置かれたまま操作が
     進むと検知が静かに消えるので、ここで fail-closed に止める。
     """
+    path = Path(path).resolve()
     top = work_tree_root(path)
     if top is None:
         raise LedgerError(
             f"議事録 root が git 管理下にない (D13): {path}. "
             "new-topic (ensure_topic) を先に通すこと"
+        )
+    relative = path.relative_to(top).parts
+    topic_scope = (
+        len(relative) in (2, 3) and relative[0] == "minutes"
+        and (len(relative) == 2 or relative[2] in {
+            "requests", "deliveries", "followups", "snapshot", "scratch",
+        })
+    )
+    if top != path and not topic_scope:
+        raise LedgerError(
+            f"議事録 root と git work tree が一致しない (D13): {path}; "
+            f"親 repo: {top}. 専用の git root を指定すること"
         )
     return top
 
@@ -177,6 +193,9 @@ def commit(root: Path, paths: list[Path], message: str) -> None:
     `git add -A` は使わない (CLAUDE.md Git 規約)。変更が無ければ何もしない
     (同一内容の再書込は正常系)。
     """
+    root = Path(root).resolve()
+    if work_tree_root(root) != root:
+        raise LedgerError(f"commit 先は git work tree の最上位である必要がある (D13): {root}")
     spec = [str(Path(p).resolve()) for p in paths]
     # 経路 1 (定常): tracked なファイルの変更は pathspec 付き commit 一発で拾える
     # (add 不要)。journal.save は FileLock を握ったままここへ来るので、保持時間 =
