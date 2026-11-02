@@ -15,7 +15,7 @@ from pathlib import Path
 from . import minutes, packet, watcher
 from .filelock import LockTimeout
 from .journal import Journal
-from .ledger import LedgerDirtyError
+from .ledger import LedgerDirtyError, LedgerError
 from .paths import ensure_topic, topic_dir
 from .relay import DeliveryUnknownError, get_relay, load_seats, save_seats
 from .review_workflow import load_manifest, validate_live_git, validate_review_workflow
@@ -776,6 +776,9 @@ def main(argv: list[str] | None = None) -> int:
             args, {"ok": False, "reason": "lock", "detail": str(exc), "exit_code": 4}
         )
         return 4
+    except LedgerError as exc:
+        print(f"[ledger] 保存先またはGit操作を確認してください: {exc}", file=sys.stderr)
+        return 2
 
 
 def entrypoint() -> int:

@@ -2,7 +2,7 @@
 
 守る性質:
 
-- D13: root は必ず git 管理下になる。既存 repo があれば再利用し、ネスト repo を作らない
+- D13: root 自体が git root になり、親 repo の index と履歴へ暗黙に書き込まない
 - D12: dispatcher 所有ファイルへの外部書込は次の操作で fail-closed に検知される。
   scope 外 (席が正当に書く scratch 等) は警報にしない (狼少年防止)
 - 機械 commit は pathspec 限定 + dispatcher 名義 (人間の commit と判別可能)
@@ -26,8 +26,7 @@ def iso_path():
 
     この repo は pytest の basetemp を repo 内 `.pytest-tmp/` に置くため、
     通常の tmp_path は **常に ai-roundtable repo の中**にある。そのままだと
-    ensure_git_root が enclosing repo (= 本物の repo) を掴み、テストの commit が
-    実 repo に向かう。「repo 外」を検証するテストは実 %TEMP% に出る必要がある
+    「repo 外」の初期化を検証できない。そこで実 %TEMP% に出る必要がある
     (%TEMP% が repo でないことは前提。崩れたら下の assert で即死する)。
 
     resolve() するのは、ledger の公開関数が正規形の path を返すため。
@@ -75,15 +74,66 @@ def test_init_when_outside_any_repo(iso_path):
     assert (root / ".git").exists()
 
 
-def test_reuses_enclosing_repo_without_nesting(iso_path):
-    outer = iso_path / "repo"
-    outer.mkdir()
-    ledger.ensure_git_root(outer)  # ここで init
+def test_rejects_enclosing_repo_without_touching_parent_history_or_index(iso_path):
+    outer, tracked = _setup(iso_path)
+    staged = outer / "user-work.txt"
+    staged.write_text("staged work", encoding="utf-8")
+    assert ledger._git(outer, "add", "--", str(staged)).returncode == 0
+    before_head = ledger._git(outer, "rev-parse", "HEAD").stdout
+    index = outer / ".git" / "index"
+    before_index = index.read_bytes()
     inner = outer / "sub" / "minutes-root"
     inner.mkdir(parents=True)
-    top = ledger.ensure_git_root(inner)
-    assert top == outer  # 既存 repo を使う
-    assert not (inner / ".git").exists()  # ネスト repo を作らない
+    with pytest.raises(ledger.LedgerError, match="親 repo"):
+        ledger.ensure_git_root(inner)
+    legacy = _state(inner)
+    with pytest.raises(ledger.LedgerError, match="一致しない"):
+        ledger.write_state(legacy, '{"round": 2}', "must not commit")
+    with pytest.raises(ledger.LedgerError, match="一致しない"):
+        ledger.read_state(legacy)
+    nested = legacy.parent / "requests" / "inv.md"
+    nested.parent.mkdir()
+    with pytest.raises(ledger.LedgerError, match="一致しない"):
+        ledger.write_state(nested, "request", "must not commit nested state")
+    assert not nested.exists()
+    with pytest.raises(ledger.LedgerError, match="最上位"):
+        ledger.commit(inner, [legacy], "must not stage")
+    assert legacy.read_text(encoding="utf-8") == "{}"
+    assert ledger._git(outer, "rev-parse", "HEAD").stdout == before_head
+    assert index.read_bytes() == before_index
+    assert not (inner / ".git").exists()
+    ledger.require_clean(outer, [tracked])
+
+
+def test_explicit_nested_git_root_is_supported(iso_path):
+    outer, _ = _setup(iso_path)
+    before_head = ledger._git(outer, "rev-parse", "HEAD").stdout
+    before_index = (outer / ".git" / "index").read_bytes()
+    inner = outer / "data"
+    inner.mkdir()
+    assert ledger._git(inner, "init", "-q").returncode == 0
+    assert ledger.ensure_git_root(inner) == inner
+    p = _state(inner)
+    ledger.write_state(p, '{"round": 1}', "dedicated data history")
+    assert ledger.require_root(p.parent) == inner
+    ledger.require_clean(inner, [p])
+    assert ledger._git(inner, "log", "-1", "--format=%s").stdout.strip() == "dedicated data history"
+    assert ledger._git(outer, "rev-parse", "HEAD").stdout == before_head
+    assert (outer / ".git" / "index").read_bytes() == before_index
+
+
+def test_ignored_nested_root_initializes_dedicated_repo(iso_path):
+    outer = iso_path / "repo"
+    outer.mkdir()
+    ledger.ensure_git_root(outer)
+    (outer / ".gitignore").write_text("ignored/\n", encoding="utf-8")
+    inner = outer / "ignored" / "data"
+    inner.mkdir(parents=True)
+    assert ledger.ensure_git_root(inner) == inner
+    assert ledger.work_tree_root(inner) == inner
+    p = _state(inner)
+    ledger.commit(inner, [p], "isolated fixture")
+    ledger.require_clean(inner, [p])
 
 
 def test_idempotent(iso_path):
@@ -98,7 +148,7 @@ def test_work_tree_root_returns_canonical_path(iso_path):
     git の `--show-toplevel` と `Path.resolve()` は同じディレクトリでも綴りが
     割れることがある (Windows の 8.3 短縮名)。割れると ensure_git_root の
     `top == root` が同じ場所を指していても不成立になり、既存 repo の中へ
-    ネスト repo を init する — D13 が禁じている状態に静かに入る。
+    既存 repo を誤認する — 専用 git root として再利用できなくなる。
 
     綴りが割れる環境は手元で再現できない (GitHub の windows runner で実測) ので、
     ここでは「正規形で返す」という不変条件そのものを固定する。

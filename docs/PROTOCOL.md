@@ -123,6 +123,8 @@ Tier3 貼付が必要な席は +1 が journal に `tier3_paste_required` とし�
 Desktop socket 不在なら **実席は Tier3 貼付が本線** (2026-08-07 実測)。
 
 議題操作では`--root`を必ず指定します。議題データは`ROOT/minutes/<slug>/`配下です。
+`ROOT`は専用の`Git`リポジトリの最上位です。親リポジトリ内の途中の保存先は拒否し、
+親の履歴へ議事録を追加しません。必要なら先に保存先自身で`git init`してください。
 既存journalの所在と照合し、同じROOTを使います。`doctor --root`は任意の診断cwdです。
 
 ## 4. 失敗分類と対応 (DESIGN v6 §6)
