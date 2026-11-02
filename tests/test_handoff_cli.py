@@ -1,6 +1,8 @@
 """Macの依頼準備から回答回収まで、外部AIを起動せずCLIで確認する。"""
 import json
 
+import pytest
+
 from roundtable import handoff, packet
 from roundtable.cli import main
 from roundtable.paths import ensure_topic
@@ -44,11 +46,14 @@ def test_handoff_invalid_target_has_no_clipboard_effect(tmp_path, monkeypatch):
     sent = []
     monkeypatch.setattr(packet, 'to_clipboard', lambda text, **kwargs: sent.append(text))
     tp, inv = setup(tmp_path)
-    assert main(['handoff', 'mac', '--transport', 'cmux', '--invocation', inv,
-                 '--workspace', 'workspace:1', '--surface', 'surface:1', '--apply',
-                 '--root', str(tmp_path)]) == 1
+    before = tp.last_result.read_bytes()
+    with pytest.raises(SystemExit) as exc:
+        main(['handoff', 'mac', '--transport', 'cmux', '--invocation', inv,
+              '--apply', '--root', str(tmp_path)])
+    assert exc.value.code == 2
     assert not sent
-    assert json.loads(tp.last_result.read_text())['reason'] == 'handoff-invalid'
+    assert tp.last_result.read_bytes() == before
+    assert not (tp.root / 'deliveries').exists()
 
 
 def test_missing_topic_does_not_create_delivery(tmp_path):
