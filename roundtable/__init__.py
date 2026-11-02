@@ -6,4 +6,4 @@
 #
 # importlib.metadata を使わないのは、この repo が install せず source から動く前提
 # だから (CI も pip install -e . をしない)。未 install 環境では metadata が引けない。
-__version__ = "0.3.0"
+__version__ = "0.4.0"

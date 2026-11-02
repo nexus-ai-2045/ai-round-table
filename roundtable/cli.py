@@ -352,6 +352,7 @@ def _cmd_handoff(args) -> int:
             workspace=args.workspace, surface=args.surface,
             script=Path(args.cmux_script) if args.cmux_script else None,
             claude_session=getattr(args, "claude_session", None),
+            implementation_manifest=getattr(args, "implementation_manifest", None),
         )
         if args.apply and result.get("ok"):
             result = handoff.deliver(tp, args.invocation, timeout_s=args.timeout)
@@ -682,6 +683,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p_ho.add_argument("--invocation", required=True)
     p_ho.add_argument("--transport", choices=("cmux", "claude-desktop", "claude-socket"), required=True)
     p_ho.add_argument("--claude-session", help="既存Claude DesktopのセッションUUID（local_接頭辞なし）")
+    p_ho.add_argument("--implementation-manifest", type=Path,
+                      help="既存workflowの実装契約を固定（claude-socket専用）")
     p_ho.add_argument("--workspace", help="CMUX workspace UUID")
     p_ho.add_argument("--surface", help="CMUX surface UUID")
     p_ho.add_argument("--cmux-script", help="既存cmux_file_signal.pyの絶対パス")
