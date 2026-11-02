@@ -185,7 +185,7 @@ Tier1 が失敗したら**自動で Tier3 に落ちる**（勝手に Tier2 へ�
 | [docs/adr/](docs/adr/README.md) | アーキテクチャ決定記録（0001: 公式 Codex SDK への段階移行） |
 | [docs/operations/](docs/operations/README.md) | 運用記録 |
 | [回答の発見・回収と担当再開](docs/operations/collection-recovery.md) | 有限待機、遅着回収、取消、再開の保証境界 |
-| [Mac優先のDesktop接続](docs/operations/mac-desktop-connection.md) | CMUX・Round Table・Claude Desktop Codeの接続と保証範囲 |
+| [Mac優先のDesktop接続](docs/operations/mac-desktop-connection.md) | 履歴資料。廃止前の接続と保証範囲 |
 | [`CMUX`の4席案（履歴）](docs/operations/cmux-four-ai-proposal.md) | 廃止済み経路の調査記録。現行の操作手順には使わない |
 | [docs/review-backlog.md](docs/review-backlog.md) | レビュー指摘と対応の記録（撤回した判断も含む） |
 | [docs/plans/](docs/plans/README.md) | 実装計画 |

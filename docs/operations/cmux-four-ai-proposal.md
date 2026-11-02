@@ -1,5 +1,7 @@
 # CMUXの4席案：入口調査と最小スモーク
 
+> 履歴資料：本書の`CMUX`経路は2026-11-02に廃止しました。現行の手順は[席への受渡し](mac-handoff.md)、完了条件は[ロードマップ](../ROADMAP.md)を参照してください。
+
 現在の進め方は[Mac優先のDesktop接続](mac-desktop-connection.md)を参照してください。
 ユーザー指定のClaude席はDesktop内Code画面です。以下は当初のCLI入口調査として残します。
 
