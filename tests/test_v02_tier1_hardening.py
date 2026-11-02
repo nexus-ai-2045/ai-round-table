@@ -591,3 +591,42 @@ def test_cli_keeps_codex_ack_per_invocation_without_marking_answer_complete(tmp_
         }
         assert "submission_receipt" not in relay_mod.load_seats(tp)["rt/t1/codex"]
     assert [r["submission_receipt"]["turn_id"] for r in Journal.load(tp).data["invocations"].values()] == ["turn_one", "turn_two"]
+
+
+def test_codex_ack_survives_auxiliary_seat_save_failure(tmp_path, monkeypatch):
+    relay = CodexAppServerRelay(cwd=str(tmp_path))
+    monkeypatch.setattr(relay, "_ensure", lambda: None)
+    calls = []
+
+    def rpc(method, params, timeout=15):
+        calls.append(method)
+        if method == "thread/start":
+            return {"thread": {"id": "thr_accepted"}}
+        return {"turn": {"id": "turn_accepted"}} if method == "turn/start" else {}
+
+    monkeypatch.setattr(relay, "_rpc", rpc)
+    monkeypatch.setattr("roundtable.cli.get_relay", lambda *a, **k: relay)
+    assert main(["new-topic", "t1", "--topic", "X", "--participants", "codex",
+                 "--root", str(tmp_path)]) == 0
+    tp = ensure_topic(tmp_path, "t1")
+
+    def fail_save(*args):
+        raise OSError("injected seat metadata write failure")
+
+    monkeypatch.setattr("roundtable.cli.save_seats", fail_save)
+    with pytest.raises(OSError, match="injected seat metadata"):
+        main(["dispatch", "t1", "--participant", "codex", "--tier", "1",
+              "--timeout", "0", "--root", str(tmp_path)])
+    journal = Journal.load(tp)
+    inv, record = next(iter(journal.data["invocations"].items()))
+    assert record["state"] == "delivered"
+    assert record["submission_receipt"] == {
+        "provider": "codex", "thread_id": "thr_accepted", "turn_id": "turn_accepted",
+        "status": "accepted",
+    }
+    from roundtable import handoff
+    with pytest.raises(ValueError, match="cannot capture request: delivered"):
+        handoff.capture_request(tp, inv, "same invocation")
+    assert not watcher.collect(tp, journal, inv, "codex", timeout_s=0)["ok"]
+    assert not Journal.load(tp).is_merged(inv)
+    assert calls.count("turn/start") == 1

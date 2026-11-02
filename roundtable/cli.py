@@ -196,10 +196,12 @@ def _cmd_dispatch(args) -> int:
                     receipt = seat.pop("submission_receipt", None)
                     if receipt is not None:
                         journal.data["invocations"][inv]["submission_receipt"] = receipt
+                        journal.set_state(inv, "delivered", f"tier{relay.tier}:{relay_label}")
                     seat["tier"] = relay.tier
                     seats[seat_key] = seat
                     save_seats(tp, seats)
-                    journal.set_state(inv, "delivered", f"tier{relay.tier}:{relay_label}")
+                    if receipt is None:
+                        journal.set_state(inv, "delivered", f"tier{relay.tier}:{relay_label}")
                     delivered = True
                     if relay.tier == 3:
                         print("\n[clipboard] packet をクリップボードに載せた。席のチャットに貼り付けてください。")
