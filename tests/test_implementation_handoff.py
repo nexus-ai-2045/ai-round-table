@@ -41,13 +41,17 @@ def case(tmp_path, monkeypatch):
     captured = handoff.capture_request(tp, inv, packet.build(tp, "claude", inv, ASSIGNMENT))
     session = str(uuid.uuid4())
     calls = []
+    config = str(tmp_path / "claude-config")
     monkeypatch.setattr(claude_socket, "resolve_target",
-                        lambda sid: calls.append(("resolve", sid)) or {"session_id": sid})
+                        lambda sid: calls.append(("resolve", sid))
+                        or {"session_id": sid, "config_dir": config})
     monkeypatch.setattr(claude_socket, "send",
                         lambda target, prompt, marker: calls.append(("send", prompt))
                         or {"state": "frame-written"})
+    monkeypatch.setattr(claude_socket, "issue_receipt",
+                        lambda target, inv_id, participant, msg_id: f"/receipts/{msg_id}.json")
     return dict(tp=tp, inv=inv, manifest=manifest, data=data, proof=proof, wt=wt,
-                session=session, calls=calls, captured=captured, root=root)
+                session=session, calls=calls, captured=captured, root=root, config=config)
 
 
 def prepare(c, **kwargs):
@@ -192,7 +196,7 @@ def test_revalidate_after_target_resolution_before_send(case, monkeypatch):
     prepare(c)
     def resolve(sid):
         (c["wt"] / "stray").write_text("changed during target lookup", encoding="utf-8")
-        return {"session_id": sid}
+        return {"session_id": sid, "config_dir": c["config"]}
     monkeypatch.setattr(claude_socket, "resolve_target", resolve)
     with pytest.raises(ValueError, match="clean"):
         handoff.deliver(c["tp"], c["inv"])

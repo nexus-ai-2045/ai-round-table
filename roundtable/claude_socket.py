@@ -11,6 +11,9 @@ import time
 import uuid
 MAX_BYTES = 8 * 1024 * 1024
 MAX_FRAME_BYTES = 1024 * 1024
+RECEIPT_DIRNAME = 'roundtable-requests'
+RECEIPT_SCHEMA = 'roundtable-request-receipt/v1'
+RECEIPT_TTL_SECONDS = 24 * 60 * 60
 _PASSIVE_ATTACHMENTS = frozenset({
     'hook_success', 'hook_cancelled', 'hook_additional_context', 'hook_blocking_error',
     'hook_system_message', 'environment', 'model', 'language', 'deferred_tools_delta',
@@ -120,6 +123,37 @@ def revalidate_target(target):
     if type(offset) is not int or offset < 0 or current['transcript_offset'] < offset:
         raise ValueError("transcript truncated or invalid offset")
     return current
+def _prune_receipts(root, now):
+    """Remove our own receipt files older than the receipt lifetime; never follow links."""
+    for entry in root.iterdir():
+        if not re.fullmatch(r'cc-msg-[0-9a-f]{32}\.(json|consumed)', entry.name):
+            continue
+        info = entry.lstat()
+        if (stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid()
+                and info.st_mtime < now - RECEIPT_TTL_SECONDS):
+            entry.unlink(missing_ok=True)
+def issue_receipt(target, invocation_id, participant, message_id, now=None):
+    """Write the one-shot request receipt the local output gate verifies before exempting a reply."""
+    if not re.fullmatch(r'cc-msg-[0-9a-f]{32}', message_id or ''):
+        raise ValueError("canonical message_id required")
+    if not re.fullmatch(r'[0-9a-f]{12}', invocation_id or '') or not participant:
+        raise ValueError("invocation_id and participant required")
+    config = target.get('config_dir')
+    if not isinstance(config, str):
+        raise ValueError("target config_dir required")
+    root = Path(config) / 'runtime' / RECEIPT_DIRNAME
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    _safe(root, 'dir')
+    issued = int(time.time() if now is None else now)
+    _prune_receipts(root, issued)
+    body = dict(schema=RECEIPT_SCHEMA, message_id=message_id, session_id=_uuid(target['session_id']),
+                invocation_id=invocation_id, participant=participant, sender_pid=os.getpid(),
+                issued_at=issued, expires_at=issued + RECEIPT_TTL_SECONDS)
+    path = root / f'{message_id}.json'
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, 'w', encoding='utf-8') as stream:
+        json.dump(body, stream, ensure_ascii=False)
+    return str(path)
 def send(target, text, message_id):
     """Write exactly one frame. A write is not a model receipt."""
     if not isinstance(text, str) or not isinstance(message_id, str) or not message_id:
@@ -221,6 +255,8 @@ def reply(target, invocation_id, participant):
                             and prompt.count(marker) == 1 and invocation_id in prompt
                             and re.search(r'(?<![\w-])' + re.escape(marker) + r'(?![\w-])', prompt)):
                         active = True
+                    elif active and candidate is not None:
+                        break
                     elif active:
                         return None
                 elif active and attachment.get('type') not in _PASSIVE_ATTACHMENTS:
@@ -246,8 +282,10 @@ def reply(target, invocation_id, participant):
                     # Await its corrected final answer; never collect the rejected one.
                     candidate, pending_id, pending_text = None, None, ''
                     continue
+                if active and candidate is not None:
+                    break
                 if active:
-                    return None  # Even a matching second user record is ambiguous.
+                    return None
                 if (message.get('role') == 'user' and text.count(marker) == 1
                         and re.search(r'(?<![\w-])' + re.escape(marker) + r'(?![\w-])', text)
                         and invocation_id in text):

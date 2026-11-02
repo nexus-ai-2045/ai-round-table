@@ -17,6 +17,8 @@ def setup_topic(tmp_path, monkeypatch):
     handoff.capture_request(tp, inv, packet.build(tp, "claude", inv))
     session = str(uuid.uuid4())
     monkeypatch.setattr(claude_socket, "resolve_target", lambda sid: {"session_id": sid})
+    monkeypatch.setattr(claude_socket, "issue_receipt",
+                        lambda target, inv_id, participant, msg_id: f"/receipts/{msg_id}.json")
     handoff.prepare(tp, inv, transport="claude-socket", claude_session=session)
     return tp, inv, claude_socket
 
@@ -192,3 +194,28 @@ def test_socket_collect_unknown_topic_has_no_side_effect(tmp_path, capsys):
                  "--invocation", "unknown"]) == 2
     assert json.loads(capsys.readouterr().out)["reason"] == "unknown-topic"
     assert not (tmp_path / "minutes").exists()
+
+
+def test_deliver_issues_receipt_for_the_sent_marker(tmp_path, monkeypatch):
+    tp, inv, socket = setup_topic(tmp_path, monkeypatch)
+    issued, sent = [], []
+    def issue(target, inv_id, participant, msg_id):
+        assert not sent
+        issued.append((inv_id, participant, msg_id))
+        return f"/receipts/{msg_id}.json"
+    monkeypatch.setattr(socket, "issue_receipt", issue)
+    monkeypatch.setattr(socket, "send", lambda target, text, msg_id: sent.append(msg_id) or {"state": "frame-written"})
+    delivered = handoff.deliver(tp, inv)
+    assert issued == [(inv, "claude", delivered["message_id"])] and sent == [delivered["message_id"]]
+    assert handoff.status(tp, inv)["request_receipt"] == f"/receipts/{delivered['message_id']}.json"
+
+
+def test_receipt_failure_blocks_send_and_keeps_prepared(tmp_path, monkeypatch):
+    tp, inv, socket = setup_topic(tmp_path, monkeypatch)
+    def refuse(*a):
+        raise ValueError("unsafe directory")
+    monkeypatch.setattr(socket, "issue_receipt", refuse)
+    monkeypatch.setattr(socket, "send", lambda *a: pytest.fail("must not send without receipt"))
+    with pytest.raises(ValueError):
+        handoff.deliver(tp, inv)
+    assert handoff.status(tp, inv)["state"] == "prepared"

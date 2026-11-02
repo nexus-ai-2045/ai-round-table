@@ -298,6 +298,8 @@ def deliver(tp: TopicPaths, inv_id: str, timeout_s=30) -> dict:
                                             implementation=implementation)
             if implementation is not None:
                 _validate_implementation(record["implementation"])
+            record["request_receipt"] = claude_socket.issue_receipt(
+                target, inv_id, record["participant"], record["message_id"])
         else:
             try:
                 command, _, _ = packet.clipboard_command()

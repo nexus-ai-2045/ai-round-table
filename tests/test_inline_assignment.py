@@ -48,6 +48,8 @@ def test_delivery_keeps_frozen_hint_and_inlines_snapshot(tmp_path, monkeypatch):
     frozen_snapshot = snapshot.read_text(encoding="utf-8")
     prompts = []
     monkeypatch.setattr(claude_socket, "resolve_target", lambda sid: {"session_id": sid})
+    monkeypatch.setattr(claude_socket, "issue_receipt",
+                        lambda target, inv_id, participant, msg_id: f"/receipts/{msg_id}.json")
     def send(target, prompt, message_id):
         assert target["request_marker"] == message_id
         assert message_id in prompt
