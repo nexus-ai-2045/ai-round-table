@@ -573,6 +573,25 @@ def test_issue_receipt_prunes_only_expired_receipt_files(seat):
     assert fresh.exists() and unrelated.exists()
 
 
+def test_issue_receipt_survives_concurrent_pruning(seat, monkeypatch):
+    root = seat['config'] / 'runtime' / 'roundtable-requests'
+    root.mkdir(parents=True, mode=0o700)
+    expired = root / ('cc-msg-' + 'd' * 32 + '.json')
+    expired.write_text('{}', encoding='utf-8')
+    original_lstat = Path.lstat
+
+    def disappear_before_stat(path, *args, **kwargs):
+        if path == expired:
+            expired.unlink(missing_ok=True)
+        return original_lstat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, 'lstat', disappear_before_stat)
+    receipt = Path(transport.issue_receipt(
+        seat['target'], INV, 'claude', 'cc-msg-' + 'f' * 32))
+    assert json.loads(receipt.read_text(encoding='utf-8'))['invocation_id'] == INV
+    assert not expired.exists()
+
+
 def test_final_answer_survives_a_later_human_turn(seat):
     request(seat)
     final = answer(seat)

@@ -128,7 +128,10 @@ def _prune_receipts(root, now):
     for entry in root.iterdir():
         if not re.fullmatch(r'cc-msg-[0-9a-f]{32}\.(json|consumed)', entry.name):
             continue
-        info = entry.lstat()
+        try:
+            info = entry.lstat()
+        except FileNotFoundError:
+            continue
         if (stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid()
                 and info.st_mtime < now - RECEIPT_TTL_SECONDS):
             entry.unlink(missing_ok=True)
