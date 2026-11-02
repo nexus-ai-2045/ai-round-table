@@ -9,4 +9,5 @@ minutes/*/scratch/
 minutes/*/snapshot/
 minutes/*/last-result.json
 .tools/
+.worktrees/
 *.egg-info/

@@ -1,8 +1,7 @@
 # Macの席への依頼受渡し
 
-Mac先行の実装対象は、依頼の固定、CMUXの既存搬送への接続、Claude Desktop Codeへの
-クリップボード受渡し、回答回収です。加えて、既存`Desktop`チャットを明示する実験的な
-`claude-socket` 搬送を用意します。既存の`CMUX`・`clipboard`経路はそのまま使えます。
+現在の搬送は、既存アプリ席への`claude-socket`と、人が貼り付ける`claude-desktop`です。
+`CMUX`は廃止し、過去の受領記録は保全します。通常の運用データは製品の作業場所とは別の`Git ROOT`へ保存します。
 
 ## 設計の不変条件
 
@@ -10,16 +9,14 @@ Mac先行の実装対象は、依頼の固定、CMUXの既存搬送への接続�
 - 製品成果物、回答原文、議事録、搬出receiptは別々に保存します。
 - 依頼変更・hash不一致・別の搬送先への再利用は拒否します。
 - 外部投入直前にsendingを記録します。投入後の例外・timeoutは送達不明にし、自動再送しません。
-- CMUXでのsubmittedは搬出だけ、Desktopのclipboard-readyは貼付前です。回答完成とは区別します。
+- `submitted`は搬出だけ、`clipboard-ready`は貼付前です。回答完成とは区別します。
 - 取消・回収と同じinvocation排他を使い、終了した依頼へ送信しません。
 - 休止中Desktopの会話をCLIのresumeや新規席にすり替えません。
 
 ## 実行環境の前提
 
-配布パッケージは共通wrapperに必要なPyYAMLを依存として導入します。cmuxアプリが起動し、
-`cmux`コマンドがPATH上に必要です。送信前に同じPythonでwrapperの`--help`を実行し、
-起動できない場合は`prepared`のまま理由を返します。環境修復後はこの準備済み依頼を再実行できます。
-送信処理を開始した後の`delivery-unknown`は、この再実行対象に含みません。
+実行環境は`Python 3.13`以上です。`claude-socket`の対象は後述の既存席に限定します。
+`CMUX`や外部の搬送スクリプトは不要です。送達不明な依頼を自動で再送しません。
 
 ## 使用順序
 
@@ -43,18 +40,6 @@ ai-roundtable handoff TOPIC --invocation INV --transport claude-desktop --apply 
 既存の対象CodeセッションのLocal環境・読取権限・保存先を確認し、準備されたpacketを貼り付けます。
 送信が無効なオフラインのリモート席へは投入しません。別セッション作成は対象変更として明示します。
 GUIで入力欄に置いただけの状態を送信済みとせず、画面の受理と回答の生成を別に確認します。
-
-CMUXで既に動いているCLI席の場合：
-
-```bash
-ai-roundtable handoff TOPIC --invocation INV --transport cmux \
-  --workspace WORKSPACE_UUID --surface SURFACE_UUID \
-  --cmux-script /absolute/path/to/Projects/shared/scripts/cmux_file_signal.py --root ROOT
-```
-
-準備結果で対象と依頼を確認した後、同じ引数に`--apply`を付けて搬出します。
-workspace/surfaceのUUIDと期待AIプロセスを照合する既存wrapperを使用します。
-CMUXの選択中ペインを暗黙の宛先にしません。
 
 回収と状態確認：
 

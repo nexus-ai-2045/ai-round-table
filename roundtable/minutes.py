@@ -106,6 +106,8 @@ def create(tp: TopicPaths, topic: str, participants: list[str], background: str 
     if background:
         body = body.rstrip() + "\n" + background.rstrip() + "\n"
     with _lock(tp):
+        if tp.minutes.exists() or tp.journal.exists():
+            raise FileExistsError(f"topic already exists: {tp.root.name}")
         _write_verified(tp, body, "create")
 
 
