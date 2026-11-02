@@ -87,6 +87,8 @@ def test_thread_start_pins_sandbox_and_never_ephemeral(monkeypatch):
         sent.append((method, params))
         if method == "thread/start":
             return {"thread": {"id": "thr_1"}}
+        if method == "turn/start":
+            return {"turn": {"id": "turn_1"}}
         return {}
 
     monkeypatch.setattr(relay, "_rpc", fake_rpc)
@@ -225,6 +227,8 @@ def test_stale_thread_ref_is_recreated_once(monkeypatch):
             raise RpcResponseError(method, {"message": "thread not found"})
         if method == "thread/start":
             return {"thread": {"id": "thr_new"}}
+        if method == "turn/start":
+            return {"turn": {"id": "turn_new"}}
         return {}
 
     monkeypatch.setattr(relay, "_rpc", fake_rpc)
@@ -519,3 +523,110 @@ def test_timeouts_have_margin_over_measured_latency():
     assert rc.TIMEOUT_INITIALIZE >= 30, "実測 6.66s に対し余裕がない"
     assert rc.TIMEOUT_THREAD_START >= 240, "実測 20.9-58.4s + 負荷時 120s 超に対し余裕がない"
     assert rc.TIMEOUT_TURN_START >= 60
+
+
+def test_codex_turn_ack_is_bound_to_the_requested_thread(monkeypatch):
+    relay = CodexAppServerRelay(cwd="/tmp/topic")
+    monkeypatch.setattr(relay, "_ensure", lambda: None)
+    calls = []
+
+    def rpc(method, params, timeout=15):
+        calls.append((method, params))
+        return {"turn": {"id": "turn_accepted", "status": "inProgress"}} if method == "turn/start" else {}
+
+    monkeypatch.setattr(relay, "_rpc", rpc)
+    seat = {"thread_ref": "thr_existing"}
+    assert relay.send(seat, "packet") == "tier1-sent"
+    assert seat["submission_receipt"] == {
+        "provider": "codex", "thread_id": "thr_existing", "turn_id": "turn_accepted",
+        "status": "accepted",
+    }
+    assert next(params for method, params in calls if method == "turn/start")["threadId"] == "thr_existing"
+
+
+@pytest.mark.parametrize("response", [None, [], "unexpected", {}, {"turn": None}, {"turn": []},
+                                       {"turn": {}}, {"turn": {"id": 4}},
+                                       {"turn": {"id": ""}}, {"turn": {"id": "  "}}])
+def test_malformed_turn_ack_never_falls_back_or_reuses_old_receipt(monkeypatch, response):
+    relay = CodexAppServerRelay(cwd="/tmp/topic")
+    monkeypatch.setattr(relay, "_ensure", lambda: None)
+    monkeypatch.setattr(relay, "_rpc", lambda method, params, timeout=15: response if method == "turn/start" else {})
+
+    class NoFallback:
+        tier = 3
+
+        def send(self, seat, text):
+            pytest.fail("an uncertain turn acknowledgement must not trigger another delivery")
+
+    seat = {"thread_ref": "thr_existing", "submission_receipt": {"turn_id": "old_turn"}}
+    with pytest.raises(DeliveryUnknownError):
+        relay_mod.FallbackRelay(relay, NoFallback()).send(seat, "same invocation")
+    assert "submission_receipt" not in seat
+
+
+def test_cli_keeps_codex_ack_per_invocation_without_marking_answer_complete(tmp_path, monkeypatch):
+    relay = CodexAppServerRelay(cwd=str(tmp_path))
+    monkeypatch.setattr(relay, "_ensure", lambda: None)
+    turns = iter(["turn_one", "turn_two"])
+
+    def rpc(method, params, timeout=15):
+        if method == "thread/start":
+            return {"thread": {"id": "thr_shared"}}
+        return {"turn": {"id": next(turns)}} if method == "turn/start" else {}
+
+    monkeypatch.setattr(relay, "_rpc", rpc)
+    monkeypatch.setattr("roundtable.cli.get_relay", lambda *a, **k: relay)
+    assert main(["new-topic", "t1", "--topic", "X", "--participants", "codex",
+                 "--root", str(tmp_path)]) == 0
+    tp = ensure_topic(tmp_path, "t1")
+    for turn_id in ["turn_one", "turn_two"]:
+        assert main(["dispatch", "t1", "--participant", "codex", "--tier", "1",
+                     "--async", "--root", str(tmp_path)]) == 0
+        invocation = json.loads(tp.last_result.read_text())["invocation"]
+        record = Journal.load(tp).data["invocations"][invocation]
+        assert record["state"] == "delivered"
+        assert record["submission_receipt"] == {
+            "provider": "codex", "thread_id": "thr_shared", "turn_id": turn_id,
+            "status": "accepted",
+        }
+        assert "submission_receipt" not in relay_mod.load_seats(tp)["rt/t1/codex"]
+    assert [r["submission_receipt"]["turn_id"] for r in Journal.load(tp).data["invocations"].values()] == ["turn_one", "turn_two"]
+
+
+def test_codex_ack_survives_auxiliary_seat_save_failure(tmp_path, monkeypatch):
+    relay = CodexAppServerRelay(cwd=str(tmp_path))
+    monkeypatch.setattr(relay, "_ensure", lambda: None)
+    calls = []
+
+    def rpc(method, params, timeout=15):
+        calls.append(method)
+        if method == "thread/start":
+            return {"thread": {"id": "thr_accepted"}}
+        return {"turn": {"id": "turn_accepted"}} if method == "turn/start" else {}
+
+    monkeypatch.setattr(relay, "_rpc", rpc)
+    monkeypatch.setattr("roundtable.cli.get_relay", lambda *a, **k: relay)
+    assert main(["new-topic", "t1", "--topic", "X", "--participants", "codex",
+                 "--root", str(tmp_path)]) == 0
+    tp = ensure_topic(tmp_path, "t1")
+
+    def fail_save(*args):
+        raise OSError("injected seat metadata write failure")
+
+    monkeypatch.setattr("roundtable.cli.save_seats", fail_save)
+    with pytest.raises(OSError, match="injected seat metadata"):
+        main(["dispatch", "t1", "--participant", "codex", "--tier", "1",
+              "--timeout", "0", "--root", str(tmp_path)])
+    journal = Journal.load(tp)
+    inv, record = next(iter(journal.data["invocations"].items()))
+    assert record["state"] == "delivered"
+    assert record["submission_receipt"] == {
+        "provider": "codex", "thread_id": "thr_accepted", "turn_id": "turn_accepted",
+        "status": "accepted",
+    }
+    from roundtable import handoff
+    with pytest.raises(ValueError, match="cannot capture request: delivered"):
+        handoff.capture_request(tp, inv, "same invocation")
+    assert not watcher.collect(tp, journal, inv, "codex", timeout_s=0)["ok"]
+    assert not Journal.load(tp).is_merged(inv)
+    assert calls.count("turn/start") == 1

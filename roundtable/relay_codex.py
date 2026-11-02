@@ -415,6 +415,7 @@ class CodexAppServerRelay:
             return self._send_locked(seat, text)
 
     def _send_locked(self, seat: dict, text: str) -> str:
+        seat.pop("submission_receipt", None)
         try:
             self._ensure()
             thread_id = seat.get("thread_ref")
@@ -440,7 +441,7 @@ class CodexAppServerRelay:
             else:
                 thread_id = self._start_thread(seat)
             try:
-                self._rpc(
+                result = self._rpc(
                     "turn/start",
                     {
                         "threadId": thread_id,
@@ -458,6 +459,17 @@ class CodexAppServerRelay:
                 raise DeliveryUnknownError(
                     f"turn/start delivery unknown; automatic Tier3 fallback disabled: {exc}"
                 ) from exc
+            turn = result.get("turn") if isinstance(result, dict) else None
+            turn_id = turn.get("id") if isinstance(turn, dict) else None
+            if not isinstance(turn_id, str) or not turn_id.strip():
+                raise DeliveryUnknownError(
+                    "turn/start returned no valid turn ID; automatic Tier3 fallback disabled"
+                )
+            # The caller transfers this per-send acknowledgement into the invocation journal.
+            seat["submission_receipt"] = {
+                "provider": "codex", "thread_id": thread_id, "turn_id": turn_id,
+                "status": "accepted",
+            }
             return "tier1-sent"
         except DeliveryUnknownError:
             # turn が動作中かもしれない。CLI の回収待ちが終わるまで process tree を保つ。
