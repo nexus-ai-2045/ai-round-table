@@ -48,6 +48,8 @@ def case(tmp_path, monkeypatch):
     monkeypatch.setattr(claude_socket, "send",
                         lambda target, prompt, marker: calls.append(("send", prompt))
                         or {"state": "frame-written"})
+    monkeypatch.setattr(claude_socket, "issue_receipt",
+                        lambda target, inv_id, participant, msg_id: f"/receipts/{msg_id}.json")
     return dict(tp=tp, inv=inv, manifest=manifest, data=data, proof=proof, wt=wt,
                 session=session, calls=calls, captured=captured, root=root, config=config)
 
