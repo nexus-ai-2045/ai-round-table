@@ -44,7 +44,11 @@ def _cmd_new_topic(args) -> int:
     """議題を開始する: ディレクトリ規約を作り minutes を生成する。"""
     tp = ensure_topic(Path(args.root), args.slug)
     participants = [p.strip() for p in args.participants.split(",") if p.strip()]
-    minutes.create(tp, args.topic, participants, background=args.background or "")
+    try:
+        minutes.create(tp, args.topic, participants, background=args.background or "")
+    except FileExistsError:
+        print(f"既存の議題は作成し直せません: {args.slug}", file=sys.stderr)
+        return 2
     journal = Journal.load(tp)
     journal.record_human_action("new-topic", args.slug)
     print(f"topic 作成: {tp.minutes}")
@@ -349,8 +353,6 @@ def _cmd_handoff(args) -> int:
     try:
         result = handoff.prepare(
             tp, args.invocation, transport=args.transport,
-            workspace=args.workspace, surface=args.surface,
-            script=Path(args.cmux_script) if args.cmux_script else None,
             claude_session=getattr(args, "claude_session", None),
             implementation_manifest=getattr(args, "implementation_manifest", None),
         )
@@ -681,13 +683,10 @@ def _build_parser() -> argparse.ArgumentParser:
     p_ho.add_argument("slug")
     p_ho.add_argument("--root", required=True)
     p_ho.add_argument("--invocation", required=True)
-    p_ho.add_argument("--transport", choices=("cmux", "claude-desktop", "claude-socket"), required=True)
+    p_ho.add_argument("--transport", choices=("claude-desktop", "claude-socket"), required=True)
     p_ho.add_argument("--claude-session", help="既存Claude DesktopのセッションUUID（local_接頭辞なし）")
     p_ho.add_argument("--implementation-manifest", type=Path,
                       help="既存workflowの実装契約を固定（claude-socket専用）")
-    p_ho.add_argument("--workspace", help="CMUX workspace UUID")
-    p_ho.add_argument("--surface", help="CMUX surface UUID")
-    p_ho.add_argument("--cmux-script", help="既存cmux_file_signal.pyの絶対パス")
     p_ho.add_argument("--apply", action="store_true", help="固定した依頼を選択済み搬送へ渡す")
     p_ho.add_argument("--timeout", type=_positive_seconds, default=30.0)
     p_ho.set_defaults(func=_cmd_handoff)
