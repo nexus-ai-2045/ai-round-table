@@ -239,7 +239,7 @@ def test_correlated_final_reply(seat, fenced):
 
 @pytest.mark.parametrize('bad', ['no_request', 'wrong_marker', 'wrong_invocation',
                                 'wrong_participant', 'wrong_session',
-                                'tool_stop', 'no_uuid', 'incomplete', 'interrupt',
+                                'tool_stop', 'no_uuid', 'incomplete',
                                 'malformed_record', 'no_marker', 'oversize', 'prose'])
 def test_reply_fails_closed(seat, bad):
     if bad != 'no_request':
@@ -261,8 +261,6 @@ def test_reply_fails_closed(seat, bad):
     if bad == 'malformed_record':
         with seat['transcript'].open('a') as stream:
             stream.write('[]\n')
-    if bad == 'interrupt':
-        request(seat, 'private unrelated chat')
     if bad == 'no_marker':
         seat['target'].pop('request_marker')
     if bad == 'oversize':
@@ -369,11 +367,11 @@ def test_unknown_or_foreign_session_attachment_fails_closed(seat, kind, session)
                                      (True, 'Another Claude session sent a message: text')])
 def test_unrelated_user_or_peer_is_never_treated_as_hook_feedback(seat, meta, text):
     request(seat)
-    answer(seat)
+    first = answer(seat)
     write_record(seat, dict(type='user', sessionId=SESSION, isMeta=meta,
                            message=dict(role='user', content=text)))
     answer(seat)
-    assert transport.reply(seat['target'], INV, 'claude') is None
+    assert transport.reply(seat['target'], INV, 'claude')['response_uuid'] == first['uuid']
 
 
 def test_marker_must_be_unambiguous(seat):
@@ -573,3 +571,37 @@ def test_issue_receipt_prunes_only_expired_receipt_files(seat):
     transport.issue_receipt(seat['target'], INV, 'claude', 'cc-msg-' + 'f' * 32, now=10_000)
     assert not old_receipt.exists() and not old_consumed.exists()
     assert fresh.exists() and unrelated.exists()
+
+
+def test_final_answer_survives_a_later_human_turn(seat):
+    request(seat)
+    final = answer(seat)
+    write_record(seat, dict(type='user', sessionId=SESSION, message=dict(role='user', content='next question')))
+    write_record(seat, dict(type='assistant', sessionId=SESSION, uuid=str(uuid.uuid4()),
+                            message=dict(role='assistant', stop_reason='end_turn', content=[dict(type='text', text='prose')])))
+    assert transport.reply(seat['target'], INV, 'claude')['response_uuid'] == final['uuid']
+
+
+def test_final_answer_survives_a_later_queued_peer_request(seat):
+    request(seat)
+    final = answer(seat)
+    write_record(seat, dict(type='attachment', sessionId=SESSION,
+                            attachment=dict(type='queued_command', prompt='other request', origin=dict(kind='peer'))))
+    assert transport.reply(seat['target'], INV, 'claude')['response_uuid'] == final['uuid']
+
+
+def test_human_turn_before_any_final_answer_stays_ambiguous(seat):
+    request(seat)
+    write_record(seat, dict(type='user', sessionId=SESSION, message=dict(role='user', content='interrupt')))
+    answer(seat)
+    assert transport.reply(seat['target'], INV, 'claude') is None
+
+
+def test_rejected_answer_followed_by_human_turn_is_not_collected(seat):
+    request(seat)
+    answer(seat)
+    write_record(seat, dict(type='user', sessionId=SESSION, isMeta=True,
+                            message=dict(role='user', content='Stop hook feedback:\nblocked')))
+    write_record(seat, dict(type='user', sessionId=SESSION, message=dict(role='user', content='next question')))
+    answer(seat)
+    assert transport.reply(seat['target'], INV, 'claude') is None

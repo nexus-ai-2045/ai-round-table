@@ -255,6 +255,8 @@ def reply(target, invocation_id, participant):
                             and prompt.count(marker) == 1 and invocation_id in prompt
                             and re.search(r'(?<![\w-])' + re.escape(marker) + r'(?![\w-])', prompt)):
                         active = True
+                    elif active and candidate is not None:
+                        break
                     elif active:
                         return None
                 elif active and attachment.get('type') not in _PASSIVE_ATTACHMENTS:
@@ -280,8 +282,10 @@ def reply(target, invocation_id, participant):
                     # Await its corrected final answer; never collect the rejected one.
                     candidate, pending_id, pending_text = None, None, ''
                     continue
+                if active and candidate is not None:
+                    break
                 if active:
-                    return None  # Even a matching second user record is ambiguous.
+                    return None
                 if (message.get('role') == 'user' and text.count(marker) == 1
                         and re.search(r'(?<![\w-])' + re.escape(marker) + r'(?![\w-])', text)
                         and invocation_id in text):
