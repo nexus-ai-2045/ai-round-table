@@ -187,7 +187,7 @@ class CodexAgent(_Agent):
         elif method == "turn/start":
             text = msg["params"]["input"][0]["text"]
             self.written.append(_seat_writes_opinion(text, self.participant, self.note))
-            self.reply(msg, {})
+            self.reply(msg, {"turn": {"id": "turn_" + str(len(self.written))}})
         else:
             self.emit({"jsonrpc": "2.0", "id": msg["id"],
                        "error": {"code": -32601, "message": method}})

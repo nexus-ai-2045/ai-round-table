@@ -149,6 +149,7 @@ def _cmd_dispatch(args) -> int:
                 relay = get_relay(
                     args.participant, tier=tier, allow_fallback=True, cwd=str(tp.root.resolve())  # 相対 --root だと spawn 先で二重解決になる (P2)
                 )
+                seat.pop("submission_receipt", None)
                 try:
                     relay_label = relay.send(seat, text)
                 except DeliveryUnknownError as exc:
@@ -192,6 +193,9 @@ def _cmd_dispatch(args) -> int:
                     print(f"\n[failed] invocation: {inv} / reason: relay / {exc}")
                     return 1
                 else:
+                    receipt = seat.pop("submission_receipt", None)
+                    if receipt is not None:
+                        journal.data["invocations"][inv]["submission_receipt"] = receipt
                     seat["tier"] = relay.tier
                     seats[seat_key] = seat
                     save_seats(tp, seats)
