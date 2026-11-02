@@ -239,7 +239,7 @@ def test_correlated_final_reply(seat, fenced):
 
 @pytest.mark.parametrize('bad', ['no_request', 'wrong_marker', 'wrong_invocation',
                                 'wrong_participant', 'wrong_session',
-                                'tool_stop', 'no_uuid', 'incomplete', 'interrupt',
+                                'tool_stop', 'no_uuid', 'incomplete',
                                 'malformed_record', 'no_marker', 'oversize', 'prose'])
 def test_reply_fails_closed(seat, bad):
     if bad != 'no_request':
@@ -261,8 +261,6 @@ def test_reply_fails_closed(seat, bad):
     if bad == 'malformed_record':
         with seat['transcript'].open('a') as stream:
             stream.write('[]\n')
-    if bad == 'interrupt':
-        request(seat, 'private unrelated chat')
     if bad == 'no_marker':
         seat['target'].pop('request_marker')
     if bad == 'oversize':
@@ -369,11 +367,11 @@ def test_unknown_or_foreign_session_attachment_fails_closed(seat, kind, session)
                                      (True, 'Another Claude session sent a message: text')])
 def test_unrelated_user_or_peer_is_never_treated_as_hook_feedback(seat, meta, text):
     request(seat)
-    answer(seat)
+    first = answer(seat)
     write_record(seat, dict(type='user', sessionId=SESSION, isMeta=meta,
                            message=dict(role='user', content=text)))
     answer(seat)
-    assert transport.reply(seat['target'], INV, 'claude') is None
+    assert transport.reply(seat['target'], INV, 'claude')['response_uuid'] == first['uuid']
 
 
 def test_marker_must_be_unambiguous(seat):
@@ -514,4 +512,115 @@ def test_cannot_borrow_text_across_api_messages(seat):
     answer(seat, message=dict(role='assistant', id='a', stop_reason=None, content=payload))
     answer(seat, message=dict(role='assistant', id='b', stop_reason=None, content=[]))
     answer(seat, message=dict(role='assistant', id='a', stop_reason='end_turn', content=[]))
+    assert transport.reply(seat['target'], INV, 'claude') is None
+
+
+def test_issue_receipt_is_private_one_shot_and_bound(seat):
+    marker = 'cc-msg-' + 'a' * 32
+    path = Path(transport.issue_receipt(seat['target'], INV, 'claude', marker, now=1000))
+    assert path == seat['config'] / 'runtime' / 'roundtable-requests' / f'{marker}.json'
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert path.parent.stat().st_mode & 0o777 == 0o700
+    body = json.loads(path.read_text(encoding='utf-8'))
+    assert body == dict(schema='roundtable-request-receipt/v1', message_id=marker,
+                        session_id=SESSION, invocation_id=INV, participant='claude',
+                        sender_pid=os.getpid(), issued_at=1000,
+                        expires_at=1000 + transport.RECEIPT_TTL_SECONDS)
+    with pytest.raises(FileExistsError):
+        transport.issue_receipt(seat['target'], INV, 'claude', marker)
+
+
+@pytest.mark.parametrize('field,value', [('message_id', 'cc-msg-short'), ('message_id', MARKER),
+                                         ('invocation_id', 'not-hex'), ('participant', ''),
+                                         ('config_dir', None)])
+def test_issue_receipt_rejects_invalid_input(seat, field, value):
+    target = dict(seat['target'])
+    args = dict(invocation_id=INV, participant='claude', message_id='cc-msg-' + 'b' * 32)
+    if field == 'config_dir':
+        target.pop('config_dir')
+    else:
+        args[field] = value
+    with pytest.raises(ValueError):
+        transport.issue_receipt(target, **args)
+    root = seat['config'] / 'runtime' / 'roundtable-requests'
+    assert not root.exists() or not any(root.iterdir())
+
+
+def test_issue_receipt_refuses_unsafe_directory(seat):
+    root = seat['config'] / 'runtime' / 'roundtable-requests'
+    root.mkdir(parents=True)
+    root.chmod(0o777)
+    with pytest.raises(ValueError):
+        transport.issue_receipt(seat['target'], INV, 'claude', 'cc-msg-' + 'c' * 32)
+    assert not any(root.iterdir())
+
+
+def test_issue_receipt_prunes_only_expired_receipt_files(seat):
+    root = seat['config'] / 'runtime' / 'roundtable-requests'
+    root.mkdir(parents=True, mode=0o700)
+    old_receipt = root / ('cc-msg-' + 'd' * 32 + '.json')
+    old_consumed = root / ('cc-msg-' + 'd' * 32 + '.consumed')
+    fresh = root / ('cc-msg-' + 'e' * 32 + '.json')
+    unrelated = root / 'notes.txt'
+    for path in (old_receipt, old_consumed, fresh, unrelated):
+        path.write_text('{}', encoding='utf-8')
+    stale = 10_000 - transport.RECEIPT_TTL_SECONDS - 1
+    for path in (old_receipt, old_consumed, unrelated):
+        os.utime(path, (stale, stale))
+    os.utime(fresh, (10_000, 10_000))
+    transport.issue_receipt(seat['target'], INV, 'claude', 'cc-msg-' + 'f' * 32, now=10_000)
+    assert not old_receipt.exists() and not old_consumed.exists()
+    assert fresh.exists() and unrelated.exists()
+
+
+def test_issue_receipt_survives_concurrent_pruning(seat, monkeypatch):
+    root = seat['config'] / 'runtime' / 'roundtable-requests'
+    root.mkdir(parents=True, mode=0o700)
+    expired = root / ('cc-msg-' + 'd' * 32 + '.json')
+    expired.write_text('{}', encoding='utf-8')
+    original_lstat = Path.lstat
+
+    def disappear_before_stat(path, *args, **kwargs):
+        if path == expired:
+            expired.unlink(missing_ok=True)
+        return original_lstat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, 'lstat', disappear_before_stat)
+    receipt = Path(transport.issue_receipt(
+        seat['target'], INV, 'claude', 'cc-msg-' + 'f' * 32))
+    assert json.loads(receipt.read_text(encoding='utf-8'))['invocation_id'] == INV
+    assert not expired.exists()
+
+
+def test_final_answer_survives_a_later_human_turn(seat):
+    request(seat)
+    final = answer(seat)
+    write_record(seat, dict(type='user', sessionId=SESSION, message=dict(role='user', content='next question')))
+    write_record(seat, dict(type='assistant', sessionId=SESSION, uuid=str(uuid.uuid4()),
+                            message=dict(role='assistant', stop_reason='end_turn', content=[dict(type='text', text='prose')])))
+    assert transport.reply(seat['target'], INV, 'claude')['response_uuid'] == final['uuid']
+
+
+def test_final_answer_survives_a_later_queued_peer_request(seat):
+    request(seat)
+    final = answer(seat)
+    write_record(seat, dict(type='attachment', sessionId=SESSION,
+                            attachment=dict(type='queued_command', prompt='other request', origin=dict(kind='peer'))))
+    assert transport.reply(seat['target'], INV, 'claude')['response_uuid'] == final['uuid']
+
+
+def test_human_turn_before_any_final_answer_stays_ambiguous(seat):
+    request(seat)
+    write_record(seat, dict(type='user', sessionId=SESSION, message=dict(role='user', content='interrupt')))
+    answer(seat)
+    assert transport.reply(seat['target'], INV, 'claude') is None
+
+
+def test_rejected_answer_followed_by_human_turn_is_not_collected(seat):
+    request(seat)
+    answer(seat)
+    write_record(seat, dict(type='user', sessionId=SESSION, isMeta=True,
+                            message=dict(role='user', content='Stop hook feedback:\nblocked')))
+    write_record(seat, dict(type='user', sessionId=SESSION, message=dict(role='user', content='next question')))
+    answer(seat)
     assert transport.reply(seat['target'], INV, 'claude') is None
