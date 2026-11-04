@@ -105,6 +105,11 @@ def _merge_invocations(disk: dict, local: dict, conflicts: list) -> dict:
         if drec is None:
             out[inv] = lrec  # 相手が知らない invocation — これが消えていた記録
             continue
+        # A saved send reservation outlives stale journal readers and collection.
+        if "codex_send_claim" in drec:
+            lrec = {**lrec, "codex_send_claim": drec["codex_send_claim"], "delivery_route": "relay"}
+            if "submission_receipt" in drec:
+                lrec["submission_receipt"] = drec["submission_receipt"]
         if drec == lrec:
             continue
         # 明示待機再開の世代を古い dispatcher の failed snapshot で戻さない。
