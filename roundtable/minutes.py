@@ -259,7 +259,10 @@ def write_verdict(tp: TopicPaths, verdict: str) -> None:
     """CEO の裁定を記録して close。裁定はこの機械経路からのみ書かれる (偽装防止)。"""
     with _lock(tp):
         text = _read_verified(tp)
-        text = text.replace("status: open", "status: closed", 1)
+        header, separator, body = text[4:].partition("\n---\n") if text.startswith("---\n") else ("", "", "")
+        if not separator or "status: open" not in header.splitlines():
+            raise ledger.LedgerError("議題は既に閉じているか、状態を確認できません")
+        text = "---\n" + header.replace("status: open", "status: closed", 1) + separator + body
         text = text.replace("verdict:", f"verdict: {verdict}", 1)
         _write_verified(tp, text, "verdict")
 
