@@ -13,6 +13,10 @@ repo-preflight の検査結果と、それに対する人間の判断を記録�
 - 公開意図: public（時期未定）
 - ライセンス: MIT
 
+## base-guardの廃止
+
+専用のbase-guardワークフローを廃止する。通常の共通preflightは、統合済みの `repo-preflight` `fe2e90f91615a5e5ed3f9b2b497c99f5786e5847` に固定する。既存の名義・秘密情報・文書整合と製品テストの検査を通して統合し、baselineや例外設定は拡大しない。
+
 ## 開発保証ゲート
 
 検査ロジックは本リポジトリへコピーしない。上流を直接呼ぶ。`engineering-brain` は埋め込まない。
