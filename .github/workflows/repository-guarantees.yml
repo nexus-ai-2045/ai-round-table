@@ -12,7 +12,7 @@ permissions:
 
 env:
   # repo-preflight 上流の検査ロジック正本（コピーしない）。SHA 固定 + checkout 後に照合。
-  REPO_PREFLIGHT_SHA: 5b7c774deb8e9abcf0fce0c5f39ec1c1f3a894f3
+  REPO_PREFLIGHT_SHA: fe2e90f91615a5e5ed3f9b2b497c99f5786e5847
 
 jobs:
   repository-guarantees:
