@@ -73,7 +73,7 @@ def _verify(record, request, snapshot):
         if raw is None or _hash(raw) != record[key]:
             raise ValueError(f"handoff artifact hash mismatch: {key}")
         verified[key] = raw
-    return verified["packet_sha256"]
+    return verified
 
 
 def _capture_request(tp, inv_id, text):
@@ -261,7 +261,7 @@ def status(tp: TopicPaths, inv_id: str) -> dict:
         return _result(record)
 
 
-def deliver(tp: TopicPaths, inv_id: str, timeout_s=30) -> dict:
+def deliver(tp: TopicPaths, inv_id: str, timeout_s=30, *, expected_preview=None) -> dict:
     """Explicit one-shot delivery. Every uncertain outcome permanently blocks resend."""
     if not math.isfinite(timeout_s) or timeout_s <= 0:
         raise ValueError("timeout must be positive and finite")
@@ -274,7 +274,12 @@ def deliver(tp: TopicPaths, inv_id: str, timeout_s=30) -> dict:
             return _result(record, ok=False, reason="transport-retired")
         if record["transport"] not in {"claude-desktop", "claude-socket"}:
             return _result(record, ok=False, reason="unsupported-handoff-transport")
-        verified_packet = _verify(record, request, snapshot)
+        verified = _verify(record, request, snapshot)
+        verified_packet = verified["packet_sha256"]
+        if expected_preview is not None and (
+            record.get("claude_session"), record.get("packet_sha256"), record.get("snapshot_sha256")
+        ) != expected_preview:
+            return {"ok": False, "reason": "preview-changed"}
         if record["state"] != "prepared":
             return _result(record, ok=False, reason="resend-forbidden",
                            state="delivery-unknown" if record["state"] == "sending" else record["state"])
@@ -293,7 +298,7 @@ def deliver(tp: TopicPaths, inv_id: str, timeout_s=30) -> dict:
             target["request_marker"] = record["message_id"]
             record["claude_target"] = target
             socket_prompt = _socket_prompt(inv_id, record["participant"],
-                                            ledger.read_state(snapshot).decode("utf-8"),
+                                            verified["snapshot_sha256"].decode("utf-8"),
                                             record["message_id"], assignment=assignment,
                                             implementation=implementation)
             if implementation is not None:

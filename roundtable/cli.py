@@ -6,10 +6,13 @@ scratch の出力を待つだけ。貼り付け先の chat 操作は人間 (CEO)
 (DESIGN v6 §0)。Tier1 障害時は Tier3 に縮退し、Tier2 へは昇格しない。
 """
 import argparse
+import hashlib
 import json
 import math
+import re
 import sys
 import time
+import uuid
 from pathlib import Path
 
 from . import minutes, packet, watcher
@@ -348,6 +351,83 @@ def _cmd_collect(args) -> int:
     return _collect_one(tp, journal, inv, rec["participant"], args.timeout, delivered)
 
 
+def _cmd_codex_send(args) -> int:
+    """確認済みの既存席と依頼を一度だけ搬送して回収する。"""
+    from . import ledger
+    from .handoff import _paths
+    from .relay_codex import CodexAppServerRelay
+
+    inv = args.invocation
+    relay = None
+    try:
+        if not re.fullmatch(r"[0-9a-f]{12}", inv):
+            raise ValueError("invalid invocation ID")
+        thread_id = str(uuid.UUID(args.thread_id))
+        if thread_id != args.thread_id:
+            raise ValueError("non-canonical Codex thread ID")
+        if not (topic_dir(Path(args.root), args.slug) / "minutes.md").is_file():
+            raise ValueError("unknown topic")
+        tp = ensure_topic(Path(args.root), args.slug)
+        with watcher._invocation_lock(tp, inv):
+            journal = Journal.load(tp)
+            rec = journal.data["invocations"].get(inv)
+            if (not rec or rec["participant"] != "codex" or rec["state"] != "prepared"
+                    or rec.get("delivery_route") != "stdout-only" or "codex_send_claim" in rec):
+                raise ValueError("invocation is not an unclaimed prepared Codex request")
+            seat = load_seats(tp).get(f"rt/{args.slug}/codex")
+            if not isinstance(seat, dict) or seat.get("thread_ref") != thread_id:
+                raise ValueError("registered Codex thread does not match the approved destination")
+            request, snapshot, _ = _paths(tp, inv)
+            def read_previewed(path, expected):
+                if path.is_symlink() or path.parent.is_symlink():
+                    raise ValueError("a captured artifact is a symlink")
+                raw = ledger.read_state(path)
+                if raw is None or hashlib.sha256(raw).hexdigest() != expected:
+                    raise ValueError("captured packet or snapshot does not match the preview")
+                return raw
+
+            text = read_previewed(request, args.packet_sha256).decode("utf-8")
+            snapshot_text = read_previewed(snapshot, args.snapshot_sha256).decode("utf-8")
+            text = packet.inline_snapshot(tp, "codex", inv, text, snapshot, snapshot_text)
+            if any((tp.scratch / f"{inv}.json{suffix}").exists() for suffix in ("", ".tmp")):
+                raise ValueError("invocation already has an output; collect it first")
+
+            # Keep a crash after the claim from reopening the transport path.
+            rec["codex_send_claim"] = {
+                "thread_id": thread_id, "packet_sha256": args.packet_sha256,
+                "snapshot_sha256": args.snapshot_sha256,
+            }
+            rec["delivery_route"] = "relay"
+            journal.save()
+            if Journal.load(tp).data["invocations"][inv].get("codex_send_claim") != rec["codex_send_claim"]:
+                raise ValueError("durable Codex send claim was not recorded")
+
+            try:
+                relay = CodexAppServerRelay(cwd=str(tp.root.resolve()))
+                relay.send_existing(seat, text)
+            except DeliveryUnknownError as exc:
+                journal.set_state(inv, "delivery-unknown", str(exc))
+                delivery_unknown = True
+            except Exception as exc:
+                journal.set_state(inv, "failed", f"relay: {exc}")
+                print(f"[failed] invocation: {inv} / {exc}", file=sys.stderr)
+                return 1
+            else:
+                journal.data["invocations"][inv]["submission_receipt"] = seat["submission_receipt"]
+                journal.set_state(inv, "delivered", "tier1:codex-frozen")
+                delivery_unknown = False
+        return _collect_one(
+            tp, journal, inv, "codex", args.timeout, delivered=True,
+            preserve_delivery_unknown=delivery_unknown,
+        )
+    except (ValueError, OSError) as exc:
+        print(f"[codex-send] {exc}", file=sys.stderr)
+        return 2
+    finally:
+        if relay is not None:
+            _close_relay(relay)
+
+
 def _cmd_handoff(args) -> int:
     """同じinvocationの依頼を固定し、明示--apply時だけ選択した席へ搬出する。"""
     from . import handoff
@@ -644,9 +724,35 @@ def _cmd_doctor(args) -> int:
     return 0
 
 
+def _cmd_export(args) -> int:
+    from .read_model import export_topic
+
+    result = export_topic(Path(args.root), args.slug)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0 if result["status"] == "available" else 2
+
+
+def _cmd_gui(args) -> int:
+    from .app import run
+
+    return run(Path(args.root), args.slug, args.safe_export)
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="roundtable", description="人間司会のマルチ AI 壁打ち dispatcher")
     sub = parser.add_subparsers(dest="command", required=True)
+
+    p_export = sub.add_parser("export", help="指定議題を変更せずJSONへ出力する")
+    p_export.add_argument("slug")
+    p_export.add_argument("--root", required=True)
+    p_export.set_defaults(func=_cmd_export)
+
+    p_gui = sub.add_parser("gui", help="指定議題のCodex・Claude Codeの席を読取り表示する")
+    p_gui.add_argument("slug")
+    p_gui.add_argument("--root", required=True)
+    p_gui.add_argument("--safe-export", type=Path,
+                       help="Safe Resumeの読取りexport JSON（任意・実行はしない）")
+    p_gui.set_defaults(func=_cmd_gui)
 
     p_new = sub.add_parser("new-topic", help="議題を開始する")
     p_new.add_argument("slug")
@@ -684,6 +790,16 @@ def _build_parser() -> argparse.ArgumentParser:
     p_col.add_argument("--timeout", type=_nonnegative_seconds, default=900.0)
     p_col.add_argument("--root", required=True)
     p_col.set_defaults(func=_cmd_collect)
+
+    p_cs = sub.add_parser("codex-send", help="確認済みの固定依頼を既存Codex席へ送信する")
+    p_cs.add_argument("slug")
+    p_cs.add_argument("--root", required=True)
+    p_cs.add_argument("--invocation", required=True)
+    p_cs.add_argument("--thread-id", required=True)
+    p_cs.add_argument("--packet-sha256", required=True)
+    p_cs.add_argument("--snapshot-sha256", required=True)
+    p_cs.add_argument("--timeout", type=_nonnegative_seconds, default=30.0)
+    p_cs.set_defaults(func=_cmd_codex_send)
 
     p_ho = sub.add_parser("handoff", help="依頼を固定し、--apply時だけ既存席へ搬出する")
     p_ho.add_argument("slug")
