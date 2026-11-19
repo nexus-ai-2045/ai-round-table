@@ -11,7 +11,7 @@ from .ledger import LedgerError
 from .local_read import read_local_file
 from .read_model import export_topic
 from .paths import topic_dir
-from .relay import rename_registered_seat
+from .relay import RelayError, rename_registered_seat
 
 
 def read_safe_export(path: Path | None) -> dict:
@@ -418,7 +418,7 @@ def run(root: Path, slug: str, safe_export: Path | None = None) -> int:
         try:
             detail = pending.result()
             succeeded = True
-        except (OSError, ValueError, RuntimeError, LedgerError) as exc:
+        except (OSError, ValueError, RuntimeError, LedgerError, RelayError) as exc:
             detail = f"処理を確認できません。記録を確認してください。\n{exc}"
         finally:
             pending = None
