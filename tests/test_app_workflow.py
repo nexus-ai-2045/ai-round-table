@@ -7,7 +7,11 @@ from roundtable import app_actions
 from roundtable.read_model import export_topic
 
 
-@pytest.mark.parametrize("mode, expected", [("反証", "再現可能な失敗例"), ("振り返り", "再利用できる学び")])
+@pytest.mark.parametrize("mode, expected", [
+    ("反証", "再現可能な失敗例"), ("振り返り", "再利用できる学び"),
+    ("先行実装調査", "GitHubの先行実装と公式資料"),
+    ("技術判断の裏取り", "公式資料と論文・文献"),
+])
 def test_review_mode_uses_frozen_packet_and_existing_collection(tmp_path, mode, expected):
     root = tmp_path.resolve()
     slug = "test-review"
@@ -20,6 +24,9 @@ def test_review_mode_uses_frozen_packet_and_existing_collection(tmp_path, mode, 
     inv = record["id"]
     frozen = app_actions.preview(root, slug, "codex", inv, str(uuid.uuid4()))
     assert expected in frozen.packet
+    if mode in app_actions.RESEARCH_MODES:
+        assert "原典URL" in frozen.packet
+        assert "確認日" in frozen.packet
     assert "架空議題" in frozen.snapshot
     topic = root / "minutes" / slug
     (topic / "scratch" / f"{inv}.json").write_text(json.dumps({
@@ -37,3 +44,21 @@ def test_review_mode_uses_frozen_packet_and_existing_collection(tmp_path, mode, 
     repeated = app_actions.execute(root, slug, "close", "--verdict=別の判断")
     assert repeated.returncode != 0
     assert export_topic(root, slug)["minutes"] == final["minutes"]
+
+
+def test_chair_note_is_in_next_preview_without_closing(tmp_path):
+    root = tmp_path.resolve()
+    slug = "chair-loop"
+    assert app_actions.execute(root, slug, "new-topic", "--topic", "架空議題",
+                               "--participants", "codex").returncode == 0
+    note = "先に最小構成を比較。\n## 次の論点は失敗時の復旧"
+    assert app_actions.execute(root, slug, "chair-note", "--note=" + note).returncode == 0
+    assert app_actions.prepare_request(root, slug, "codex", "反証").returncode == 0
+    record, = export_topic(root, slug)["invocations"]
+    frozen = app_actions.preview(root, slug, "codex", record["id"], str(uuid.uuid4()))
+    assert "status: open" in frozen.snapshot
+    assert "> ## 次の論点は失敗時の復旧" in frozen.snapshot
+    assert app_actions.execute(root, slug, "close", "--verdict=採用").returncode == 0
+    before = export_topic(root, slug)["minutes"]
+    assert app_actions.execute(root, slug, "chair-note", "--note=閉会後").returncode != 0
+    assert export_topic(root, slug)["minutes"] == before

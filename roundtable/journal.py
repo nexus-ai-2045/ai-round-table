@@ -105,11 +105,29 @@ def _merge_invocations(disk: dict, local: dict, conflicts: list) -> dict:
         if drec is None:
             out[inv] = lrec  # 相手が知らない invocation — これが消えていた記録
             continue
-        # A saved send reservation outlives stale journal readers and collection.
-        if "codex_send_claim" in drec:
-            lrec = {**lrec, "codex_send_claim": drec["codex_send_claim"], "delivery_route": "relay"}
+        for claim_key in ("codex_send_claim", "grok_send_claim", "antigravity_send_claim", "codex_queue_claim"):
+            if claim_key in drec:
+                lrec = {**lrec, claim_key: drec[claim_key], "delivery_route": "relay"}
             if "submission_receipt" in drec:
                 lrec["submission_receipt"] = drec["submission_receipt"]
+        lrec = dict(lrec)
+        for evidence_key in ("codex_queue_acceptance", "codex_queue_arrival"):
+            if evidence_key not in drec:
+                continue
+            saved, incoming = drec[evidence_key], lrec.get(evidence_key)
+            if incoming is None or incoming == saved:
+                lrec[evidence_key] = saved
+                continue
+            if (evidence_key == "codex_queue_arrival" and isinstance(saved, dict)
+                    and isinstance(incoming, dict) and saved.get("turn_id") == incoming.get("turn_id")
+                    and saved.get("state") in ("arrived", "completed")
+                    and incoming.get("state") in ("arrived", "completed")):
+                lrec[evidence_key] = incoming if incoming["state"] == "completed" else saved
+                continue
+            conflicts.append({"id": uuid.uuid4().hex[:12], "invocation": inv,
+                              "at": datetime.now(timezone.utc).isoformat(),
+                              "field": evidence_key, "kept": saved, "dropped": incoming})
+            lrec[evidence_key] = saved
         if drec == lrec:
             continue
         # 明示待機再開の世代を古い dispatcher の failed snapshot で戻さない。

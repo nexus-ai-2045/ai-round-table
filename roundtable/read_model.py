@@ -48,12 +48,12 @@ def export_topic(root: Path, slug: str) -> dict:
             if not isinstance(seat, dict):
                 raise ValueError("invalid-schema")
             participant = seat.get("participant", "")
-            provider = ("codex" if participant == "codex" else
+            provider = (participant if participant in ("codex", "grok") else
                         "claude" if participant in ("claude", "cc", "claude-code") else "other")
             projected_seats.append({
-                "id": key, "provider": provider,
-                "conversation_id": seat.get("thread_ref"),
-                "title": seat.get("title", seat.get("thread_name", key)),
+                "id": key, "provider": provider, "participant": participant,
+                "conversation_id": seat.get("thread_ref"), "transport": seat.get("transport"),
+                "title": seat.get("display_title") or seat.get("title") or seat.get("thread_name") or key,
                 "state": "unknown", "receipt": _receipt(seat.get("submission_receipt")),
             })
         projected_invocations = []
@@ -72,7 +72,7 @@ def export_topic(root: Path, slug: str) -> dict:
                 session_id = receipt_data.get("claude_session")
                 if record.get("participant") in ("claude", "cc", "claude-code") and isinstance(session_id, str):
                     projected_seats.append({
-                        "id": f"handoff/{key}", "provider": "claude",
+                        "id": f"handoff/{key}", "provider": "claude", "participant": record["participant"],
                         "conversation_id": session_id, "title": record["participant"],
                         "state": "unknown", "receipt": receipt,
                     })
@@ -80,7 +80,7 @@ def export_topic(root: Path, slug: str) -> dict:
                 "id": key, "participant": record.get("participant"),
                 "round": record.get("round"),
                 "state": ("delivery-unknown" if record["state"] == "prepared"
-                          and (record.get("codex_send_claim") or receipt.get("state") == "sending")
+                          and (record.get("codex_send_claim") or record.get("codex_queue_claim") or record.get("grok_send_claim") or record.get("antigravity_send_claim") or receipt.get("state") == "sending")
                           else record["state"]),
                 "receipt": receipt,
                 "submission_receipt": {
@@ -88,7 +88,6 @@ def export_topic(root: Path, slug: str) -> dict:
                     if field in ("provider", "thread_id", "turn_id", "status")
                 } if isinstance(record.get("submission_receipt"), dict) else {},
             })
-        # 一つのファイルだけ更新された観測を正常なスナップショットと扱わない。
         if any((read_local_file(path, _MAX_BYTES) if path.exists() or path.is_symlink() else None) != content
                for path, content in zip(paths, raw)):
             raise ValueError("source-changed")

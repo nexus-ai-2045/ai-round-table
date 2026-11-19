@@ -83,6 +83,8 @@ def merge_seats(disk: dict, local: dict) -> dict:
             seat = dict(seat)
             if not seat.get("thread_ref") and cur.get("thread_ref"):
                 seat["thread_ref"] = cur["thread_ref"]
+            if cur.get("thread_ref") == seat.get("thread_ref") and cur.get("display_title"):
+                seat["display_title"] = cur["display_title"]
         out[key] = seat
     return out
 
@@ -104,6 +106,21 @@ def save_seats(tp: TopicPaths, data: dict) -> None:
             json.dumps(merged, ensure_ascii=False, indent=1),
             f"minutes({tp.root.name}): seats",
         )
+
+
+def rename_registered_seat(tp: TopicPaths, key: str, thread_id: str, title: str) -> None:
+    title = title.strip()
+    if not title or len(title) > 120 or any(ord(char) < 32 for char in title):
+        raise ValueError("チャット名は1〜120文字の一行で入力してください")
+    with FileLock(tp.lock(_SEATS_NAME)):
+        raw = ledger.read_state(tp.seats)
+        seats = json.loads(raw) if raw is not None else {}
+        seat = seats.get(key)
+        if not isinstance(seat, dict) or not thread_id or seat.get("thread_ref") != thread_id:
+            raise ValueError("登録済みのチャットが見つからないか、宛先が変わりました")
+        seat["display_title"] = title
+        ledger.write_state(tp.seats, json.dumps(seats, ensure_ascii=False, indent=1),
+                           f"minutes({tp.root.name}): seat display title")
 
 
 class FallbackRelay:

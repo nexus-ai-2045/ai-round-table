@@ -1,7 +1,7 @@
 # ai-roundtable 設計書 v6 — chat-first architecture
 
 - 日付: 2026-07-28 (v5: 2026-07-27 CEO GO)
-- 状態: 実装計画あり (docs/plans/) → Task 1 開始待ち
+- 状態: v6の基盤設計を保全。現在の実装・受入状況は[ロードマップ](ROADMAP.md)、画面と業務状態は[議題ワークスペース設計](topic-workspace-design.md)を参照。
 - v5→v6: 追加調査・実測の統合 (機能変更なし):
   Windows での app-server 実測 / ACP 収束戦略 / Gemini の Tier1 候補昇格 /
   fs API による検証補助 / 先行事例ポジショニング。詳細根拠は references/ と
@@ -10,6 +10,10 @@
 - レビュー履歴: CC 敵対 8 / Web 裏取り 14 / Codex 1st 9 / Codex 2nd 6 /
   実装計画への内部コードレビュー 13 (計画に反映済み)。
   v4 (socket/daemon 案) は採用前に superseded、git 履歴に保全
+
+## 現在の読み方（2026-11-05）
+
+本書のv6の要件・調査記録には当時の制約が含まれる。現在は円卓アプリの画面を設計・実装する。画面・人間判断・実装連携は[議題ワークスペース設計](topic-workspace-design.md)を優先し、採用済みの搬送退役は[ADR-0004](adr/0004-retire-cmux-and-preserve-topic-data.md)、接続先別の現行動作は[読取りと操作の契約](read-only-app.md)を参照する。過去の「新UIを作らない」「すべてのCLI席を禁止」を、現在採用されたGUIとArgon CLI経路の禁止へ読み替えない。任意のAI起動や新規会話作成を許可する変更でもない。
 
 ## 0. 要件 (CEO 確定)
 
@@ -24,7 +28,7 @@
 ## 1. 目的
 
 人間 (CEO) が司会するマルチ AI の壁打ち・多者会談基盤。現在はユーザー指定によりMacを優先し、
-既存Windows経路も維持する。新UIは作らず、CMUXは任意の搬送経路として共通wrapperを利用する。
+既存Windows経路も維持する。円卓のGUIは既存の搬送・記録処理を利用する。CMUXは退役済みの経路であり、必須にも任意の新規経路にも含めない。
 現在の境界は[ADR-0003](adr/0003-mac-operation-boundary.md)、進行計画は[ROADMAP](ROADMAP.md)を参照。
 
 ## 2. 決定事項

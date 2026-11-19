@@ -20,7 +20,7 @@ from .filelock import LockTimeout
 from .journal import Journal
 from .ledger import LedgerDirtyError, LedgerError
 from .paths import ensure_topic, topic_dir
-from .relay import DeliveryUnknownError, get_relay, load_seats, save_seats
+from .relay import DeliveryUnknownError, RelayError, get_relay, load_seats, save_seats
 from .review_workflow import load_manifest, validate_live_git, validate_review_workflow
 
 
@@ -351,32 +351,35 @@ def _cmd_collect(args) -> int:
     return _collect_one(tp, journal, inv, rec["participant"], args.timeout, delivered)
 
 
-def _cmd_codex_send(args) -> int:
+def _cmd_frozen_send(args) -> int:
     """確認済みの既存席と依頼を一度だけ搬送して回収する。"""
     from . import ledger
     from .handoff import _paths
-    from .relay_codex import CodexAppServerRelay
+    provider = args.provider
+    claim_key = f"{provider}_send_claim"
 
     inv = args.invocation
     relay = None
     try:
         if not re.fullmatch(r"[0-9a-f]{12}", inv):
             raise ValueError("invalid invocation ID")
-        thread_id = str(uuid.UUID(args.thread_id))
-        if thread_id != args.thread_id:
+        thread_id = args.thread_id
+        if provider == "codex" and str(uuid.UUID(thread_id)) != thread_id:
             raise ValueError("non-canonical Codex thread ID")
+        if provider == "grok" and not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", thread_id):
+            raise ValueError("invalid Grok session ID")
         if not (topic_dir(Path(args.root), args.slug) / "minutes.md").is_file():
             raise ValueError("unknown topic")
         tp = ensure_topic(Path(args.root), args.slug)
         with watcher._invocation_lock(tp, inv):
             journal = Journal.load(tp)
             rec = journal.data["invocations"].get(inv)
-            if (not rec or rec["participant"] != "codex" or rec["state"] != "prepared"
-                    or rec.get("delivery_route") != "stdout-only" or "codex_send_claim" in rec):
-                raise ValueError("invocation is not an unclaimed prepared Codex request")
-            seat = load_seats(tp).get(f"rt/{args.slug}/codex")
+            if (not rec or rec["participant"] != provider or rec["state"] != "prepared"
+                    or rec.get("delivery_route") != "stdout-only" or claim_key in rec):
+                raise ValueError("invocation is not an unclaimed prepared request")
+            seat = load_seats(tp).get(f"rt/{args.slug}/{provider}")
             if not isinstance(seat, dict) or seat.get("thread_ref") != thread_id:
-                raise ValueError("registered Codex thread does not match the approved destination")
+                raise ValueError("registered session does not match the approved destination")
             request, snapshot, _ = _paths(tp, inv)
             def read_previewed(path, expected):
                 if path.is_symlink() or path.parent.is_symlink():
@@ -388,23 +391,34 @@ def _cmd_codex_send(args) -> int:
 
             text = read_previewed(request, args.packet_sha256).decode("utf-8")
             snapshot_text = read_previewed(snapshot, args.snapshot_sha256).decode("utf-8")
-            text = packet.inline_snapshot(tp, "codex", inv, text, snapshot, snapshot_text)
+            text = packet.inline_snapshot(tp, provider, inv, text, snapshot, snapshot_text)
             if any((tp.scratch / f"{inv}.json{suffix}").exists() for suffix in ("", ".tmp")):
                 raise ValueError("invocation already has an output; collect it first")
 
-            # Keep a crash after the claim from reopening the transport path.
-            rec["codex_send_claim"] = {
+            rec[claim_key] = {
                 "thread_id": thread_id, "packet_sha256": args.packet_sha256,
                 "snapshot_sha256": args.snapshot_sha256,
             }
             rec["delivery_route"] = "relay"
             journal.save()
-            if Journal.load(tp).data["invocations"][inv].get("codex_send_claim") != rec["codex_send_claim"]:
-                raise ValueError("durable Codex send claim was not recorded")
+            if Journal.load(tp).data["invocations"][inv].get(claim_key) != rec[claim_key]:
+                raise ValueError("durable send claim was not recorded")
 
             try:
-                relay = CodexAppServerRelay(cwd=str(tp.root.resolve()))
-                relay.send_existing(seat, text)
+                if provider == "codex":
+                    from .relay_codex import CodexAppServerRelay
+
+                    relay = CodexAppServerRelay(cwd=str(tp.root.resolve()))
+                    relay.send_existing(seat, text)
+                else:
+                    from .relay_grok import GrokAcpRelay
+
+                    relay = GrokAcpRelay(cwd=str(tp.root.resolve()), auto_allow_kinds=())
+                    try:
+                        label = relay.send(seat, text)
+                    except RelayError as exc:
+                        raise DeliveryUnknownError("Grok送達不明。既存の出力を照合してください。") from exc
+                    journal.data["invocations"][inv]["grok_completion"] = label
             except DeliveryUnknownError as exc:
                 journal.set_state(inv, "delivery-unknown", str(exc))
                 delivery_unknown = True
@@ -413,15 +427,16 @@ def _cmd_codex_send(args) -> int:
                 print(f"[failed] invocation: {inv} / {exc}", file=sys.stderr)
                 return 1
             else:
-                journal.data["invocations"][inv]["submission_receipt"] = seat["submission_receipt"]
-                journal.set_state(inv, "delivered", "tier1:codex-frozen")
+                if provider == "codex":
+                    journal.data["invocations"][inv]["submission_receipt"] = seat["submission_receipt"]
+                journal.set_state(inv, "delivered", f"tier1:{provider}-frozen")
                 delivery_unknown = False
         return _collect_one(
-            tp, journal, inv, "codex", args.timeout, delivered=True,
+            tp, journal, inv, provider, args.timeout, delivered=True,
             preserve_delivery_unknown=delivery_unknown,
         )
     except (ValueError, OSError) as exc:
-        print(f"[codex-send] {exc}", file=sys.stderr)
+        print(f"[{provider}-send] {exc}", file=sys.stderr)
         return 2
     finally:
         if relay is not None:
@@ -662,6 +677,15 @@ def _cmd_status(args) -> int:
     return 0
 
 
+def _cmd_chair_note(args) -> int:
+    root = Path(args.root)
+    if not (topic_dir(root, args.slug) / "minutes.md").is_file():
+        raise LedgerError("議題が見つかりません")
+    minutes.add_chair_note(ensure_topic(root, args.slug), args.note)
+    print("座長判断を記録しました。次の依頼の固定版に含まれます。")
+    return 0
+
+
 def _cmd_close(args) -> int:
     """未解決一覧を必ず表示してから verdict を記入して close する (偽装成功防止)。"""
     tp = ensure_topic(Path(args.root), args.slug)
@@ -791,15 +815,16 @@ def _build_parser() -> argparse.ArgumentParser:
     p_col.add_argument("--root", required=True)
     p_col.set_defaults(func=_cmd_collect)
 
-    p_cs = sub.add_parser("codex-send", help="確認済みの固定依頼を既存Codex席へ送信する")
-    p_cs.add_argument("slug")
-    p_cs.add_argument("--root", required=True)
-    p_cs.add_argument("--invocation", required=True)
-    p_cs.add_argument("--thread-id", required=True)
-    p_cs.add_argument("--packet-sha256", required=True)
-    p_cs.add_argument("--snapshot-sha256", required=True)
-    p_cs.add_argument("--timeout", type=_nonnegative_seconds, default=30.0)
-    p_cs.set_defaults(func=_cmd_codex_send)
+    for provider in ("codex", "grok"):
+        p_cs = sub.add_parser(f"{provider}-send", help=f"確認済みの固定依頼を既存{provider}席へ送信する")
+        p_cs.add_argument("slug")
+        p_cs.add_argument("--root", required=True)
+        p_cs.add_argument("--invocation", required=True)
+        p_cs.add_argument("--thread-id", required=True)
+        p_cs.add_argument("--packet-sha256", required=True)
+        p_cs.add_argument("--snapshot-sha256", required=True)
+        p_cs.add_argument("--timeout", type=_nonnegative_seconds, default=30.0)
+        p_cs.set_defaults(func=_cmd_frozen_send, provider=provider)
 
     p_ho = sub.add_parser("handoff", help="依頼を固定し、--apply時だけ既存席へ搬出する")
     p_ho.add_argument("slug")
@@ -852,6 +877,12 @@ def _build_parser() -> argparse.ArgumentParser:
     p_st.add_argument("slug")
     p_st.add_argument("--root", required=True)
     p_st.set_defaults(func=_cmd_status)
+
+    p_note = sub.add_parser("chair-note", help="議題を継続して座長判断を議事録に記録する")
+    p_note.add_argument("slug")
+    p_note.add_argument("--root", required=True)
+    p_note.add_argument("--note", required=True)
+    p_note.set_defaults(func=_cmd_chair_note)
 
     p_cl = sub.add_parser("close", help="未解決一覧を表示してから verdict で close する")
     p_cl.add_argument("slug")

@@ -64,3 +64,16 @@ def test_safe_export_rejects_symlink(tmp_path):
     except OSError:
         pytest.skip("symlink creation unavailable")
     assert read_safe_export(path)["reason"] == "symlink"
+
+
+def test_search_and_sort_registered_chats_preserves_seat_ids():
+    from roundtable.app import visible_seats
+
+    seats = [
+        {"id": "claude/1", "title": "設計 B", "provider": "claude"},
+        {"id": "codex/1", "title": "設計 Ａ", "provider": "codex"},
+        {"id": "grok/1", "title": "別件", "provider": "grok"},
+    ]
+    assert [s["id"] for s in visible_seats(seats, "設計")] == ["codex/1", "claude/1"]
+    assert [s["id"] for s in visible_seats(seats, "設計", descending=True)] == ["claude/1", "codex/1"]
+    assert [s["id"] for s in visible_seats(seats, "設計 a")] == ["codex/1"]
