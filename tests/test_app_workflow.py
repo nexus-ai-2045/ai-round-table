@@ -81,3 +81,35 @@ def test_antigravity_body_keeps_every_line_of_a_multiline_assignment(tmp_path):
     assert "[roundtable packet" not in body
     assert ".json.tmp" not in body
     assert body.endswith(frozen.snapshot)
+
+
+@pytest.mark.parametrize("suffix", ["", ".tmp"])
+def test_antigravity_send_refuses_when_an_answer_is_already_present(tmp_path, monkeypatch, suffix):
+    from roundtable.journal import Journal
+    from roundtable.paths import ensure_topic
+
+    root = tmp_path.resolve()
+    slug = "test-antigravity-present"
+    result = app_actions.execute(root, slug, "new-topic", "--topic", "架空議題", "--participants", "antigravity")
+    assert result.returncode == 0, result.stderr
+    result = app_actions.prepare_request(root, slug, "antigravity", "反証", question="問い")
+    assert result.returncode == 0, result.stderr
+    inv = app_actions.prepared_invocation(result)
+    frozen = app_actions.preview(root, slug, "antigravity", inv, app_actions.ANTIGRAVITY_MODEL)
+    tp = ensure_topic(root, slug)
+    (tp.scratch / f"{inv}.json{suffix}").write_text("{}", encoding="utf-8")
+    fake_cli = str(tmp_path / "fake-agy")
+    monkeypatch.setattr(app_actions.shutil, "which", lambda name: fake_cli)
+    real_run = app_actions.subprocess.run
+
+    def guarded_run(args, *rest, **kwargs):
+        if args and args[0] == fake_cli:
+            raise AssertionError("must not call the CLI")
+        return real_run(args, *rest, **kwargs)
+
+    monkeypatch.setattr(app_actions.subprocess, "run", guarded_run)
+    with pytest.raises(ValueError):
+        frozen.send_antigravity(root, slug)
+    record = Journal.load(tp).data["invocations"][inv]
+    assert "antigravity_send_claim" not in record
+    assert record["delivery_route"] == "stdout-only"

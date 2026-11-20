@@ -141,8 +141,8 @@ class Preview:
             record = journal.data["invocations"].get(inv, {})
             if (record.get("state") != "prepared" or record.get("participant") != "antigravity"
                     or record.get("delivery_route") != "stdout-only" or "antigravity_send_claim" in record
-                    or output.exists()):
-                raise ValueError("準備済みの未送信依頼を選んでください")
+                    or output.exists() or output.with_name(output.name + ".tmp").exists()):
+                raise ValueError("準備済みの未送信依頼を選んでください（回答がある依頼は先に回収してください）")
             if preview(root, slug, self.provider, inv, self.target) != self:
                 raise ValueError("プレビュー後に内容が変わりました")
             record["antigravity_send_claim"] = {"model": self.target, "packet_sha256": self.packet_hash,
