@@ -73,15 +73,19 @@ class Preview:
     packet_hash: str
     snapshot_hash: str
 
-    def desktop_body(self, root: Path, slug: str) -> str:
-        from .packet import inline_snapshot
+    def _topic_paths(self, root: Path, slug: str):
         from .paths import TopicPaths
 
         directory = topic_dir(root, slug)
         paths = TopicPaths(directory, directory / "minutes.md", directory / "journal.json",
                            directory / "scratch", directory / "snapshot")
-        return inline_snapshot(paths, "codex", self.invocation, self.packet,
-                               directory / "requests" / f"{self.invocation}.snapshot.md", self.snapshot)
+        return paths, directory / "requests" / f"{self.invocation}.snapshot.md"
+
+    def desktop_body(self, root: Path, slug: str) -> str:
+        from .packet import inline_snapshot
+
+        paths, snapshot_path = self._topic_paths(root, slug)
+        return inline_snapshot(paths, "codex", self.invocation, self.packet, snapshot_path, self.snapshot)
 
     def reserve_desktop(self, root: Path, slug: str) -> str:
         from .journal import Journal
@@ -110,8 +114,12 @@ class Preview:
                 raise ValueError("送信依頼を保存できませんでした")
         return "Desktop連携側への送信依頼を保存しました。送信受付は別途確認します。"
 
-    def antigravity_body(self) -> str:
-        assignment = self.packet.split("\n", 2)[1]
+    def antigravity_body(self, root: Path, slug: str) -> str:
+        from .packet import captured_assignment
+
+        paths, snapshot_path = self._topic_paths(root, slug)
+        captured = captured_assignment(paths, "antigravity", self.invocation, self.packet, snapshot_path)
+        assignment = captured.split("\n", 1)[1].rstrip("\n")
         return (assignment + "\n議事録を参考に回答してください。ファイル操作は行わず、回答をJSONで返してください。"
                 "\n\n── 議事録の固定版 ──\n\n" + self.snapshot)
 
@@ -154,7 +162,7 @@ class Preview:
                     result = subprocess.run(
                         [binary, "--mode", "plan", "--sandbox", "--disable-slash-commands",
                          "--model", self.target, "--output-format", "json", "--json-schema",
-                         json.dumps(schema), "--print", self.antigravity_body()],
+                         json.dumps(schema), "--print", self.antigravity_body(root, slug)],
                         cwd=work, stdin=subprocess.DEVNULL, capture_output=True, text=True,
                         timeout=300, check=False,
                     )

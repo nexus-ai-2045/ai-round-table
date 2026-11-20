@@ -577,7 +577,7 @@ def run(root: Path, slug: str, safe_export: Path | None = None) -> int:
             for seat in snapshot.get("seats", [])
         )
         if provider == "antigravity":
-            box.insert("1.0", frozen.antigravity_body())
+            box.insert("1.0", frozen.antigravity_body(root, slug))
         elif desktop:
             box.insert("1.0", frozen.desktop_body(root, slug))
         else:

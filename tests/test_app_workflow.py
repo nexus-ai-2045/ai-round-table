@@ -62,3 +62,22 @@ def test_chair_note_is_in_next_preview_without_closing(tmp_path):
     before = export_topic(root, slug)["minutes"]
     assert app_actions.execute(root, slug, "chair-note", "--note=閉会後").returncode != 0
     assert export_topic(root, slug)["minutes"] == before
+
+
+def test_antigravity_body_keeps_every_line_of_a_multiline_assignment(tmp_path):
+    root = tmp_path.resolve()
+    slug = "test-antigravity"
+    result = app_actions.execute(root, slug, "new-topic", "--topic", "架空議題", "--participants", "antigravity")
+    assert result.returncode == 0, result.stderr
+    question = "一行目の問い。\n二行目の制約を必ず守る。"
+    result = app_actions.prepare_request(root, slug, "antigravity", "反証", question=question)
+    assert result.returncode == 0, result.stderr
+    inv = app_actions.prepared_invocation(result)
+    frozen = app_actions.preview(root, slug, "antigravity", inv, app_actions.ANTIGRAVITY_MODEL)
+    assert "二行目の制約を必ず守る。" in frozen.packet
+    body = frozen.antigravity_body(root, slug)
+    assert "一行目の問い。" in body
+    assert "二行目の制約を必ず守る。" in body
+    assert "[roundtable packet" not in body
+    assert ".json.tmp" not in body
+    assert body.endswith(frozen.snapshot)
