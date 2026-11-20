@@ -431,6 +431,16 @@ def _cmd_frozen_send(args) -> int:
                     journal.data["invocations"][inv]["submission_receipt"] = seat["submission_receipt"]
                 journal.set_state(inv, "delivered", f"tier1:{provider}-frozen")
                 delivery_unknown = False
+        from .relay_grok import GrokAcpRelay
+
+        if isinstance(relay, GrokAcpRelay) and not any(
+            (tp.scratch / f"{inv}.json{suffix}").exists() for suffix in ("", ".tmp")
+        ):
+            answer = relay.captured_answer_json()
+            if answer is not None:
+                minutes.atomic_write(tp.scratch / f"{inv}.json", answer)
+                journal.data["invocations"][inv]["answer_source"] = "conversation"
+                journal.save()
         return _collect_one(
             tp, journal, inv, provider, args.timeout, delivered=True,
             preserve_delivery_unknown=delivery_unknown,

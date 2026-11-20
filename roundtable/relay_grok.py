@@ -151,6 +151,8 @@ class GrokAcpRelay:
         self._loaded_sessions: set[str] = set()
         # 直近 send() 中の許可要求の記録。CEO 提示用の detector で、判定には使わない。
         self.permission_log: list[dict] = []
+        self._capture_session: str | None = None
+        self._answer_chunks: list[str] = []
 
     # ---- transport ---------------------------------------------------
 
@@ -237,8 +239,46 @@ class GrokAcpRelay:
                 self._handle_request(msg)
                 continue
             if msg.get("method"):
-                continue  # notification (session/update / _x.ai/*) は捨てる
+                self._handle_notification(msg)
+                continue
             self._q.put(msg)
+
+    def _begin_answer_capture(self, session_id: str) -> None:
+        self._capture_session = session_id
+        self._answer_chunks = []
+
+    def _handle_notification(self, msg: dict) -> None:
+        if msg.get("method") != "session/update":
+            return
+        params = msg.get("params") or {}
+        update = params.get("update") or {}
+        content = update.get("content") or {}
+        if (
+            self._capture_session is not None
+            and params.get("sessionId") == self._capture_session
+            and update.get("sessionUpdate") == "agent_message_chunk"
+            and content.get("type") == "text"
+            and isinstance(content.get("text"), str)
+        ):
+            self._answer_chunks.append(content["text"])
+
+    def captured_answer_json(self) -> str | None:
+        text = "".join(self._answer_chunks)
+        decoder = json.JSONDecoder()
+        objects = []
+        index = text.find("{")
+        while index != -1:
+            try:
+                value, end = decoder.raw_decode(text, index)
+            except json.JSONDecodeError:
+                index = text.find("{", index + 1)
+                continue
+            if isinstance(value, dict):
+                objects.append(value)
+            index = text.find("{", end)
+        if len(objects) != 1:
+            return None
+        return json.dumps(objects[0], ensure_ascii=False)
 
     def _drain_stderr(self) -> None:
         """stderr を読み捨てる (最後の数行だけ残す)。
@@ -431,6 +471,7 @@ class GrokAcpRelay:
                 self._load_session(session_id)
             else:
                 session_id = self._new_session(seat)
+            self._begin_answer_capture(session_id)
             result = self._rpc(
                 "session/prompt",
                 {"sessionId": session_id, "prompt": [{"type": "text", "text": text}]},
