@@ -113,6 +113,76 @@ def resolve_target(session_id, config_dir=None):
                 transcript_inode=info.st_ino, transcript_offset=info.st_size,
                 config_dir=str(config), socket_device=sock_info.st_dev,
                 socket_inode=sock_info.st_ino)
+def list_live_sessions(config_dir=None):
+    """List selectable local Desktop sessions without reading their conversations."""
+    if sys.platform not in ('darwin', 'linux'):
+        return []
+    config = Path(config_dir) if config_dir is not None else Path.home() / '.claude'
+    sessions = config / 'sessions'
+    candidates = {}
+    try:
+        _safe(sessions, 'dir')
+        for entry in sessions.glob('*.json'):
+            if not entry.stem.isdecimal():
+                continue
+            try:
+                record = json.loads(_read(entry, 65536))
+                if not isinstance(record, dict) or record.get('entrypoint') != 'claude-desktop':
+                    continue
+                session_id = record.get('sessionId')
+                if not isinstance(session_id, str):
+                    continue
+                resolve_target(session_id, config)
+                cwd = record.get('cwd')
+                candidates[session_id] = Path(cwd).name if isinstance(cwd, str) else ''
+            except (OSError, ValueError, subprocess.TimeoutExpired):
+                continue
+    except (OSError, ValueError):
+        return []
+    return sorted(candidates.items(), key=lambda item: (item[1].casefold(), item[0]))
+
+
+def list_desktop_chats(metadata_root=None, config_dir=None):
+    """Read the macOS Desktop catalog, without exposing transcript contents."""
+    if metadata_root is None:
+        if sys.platform != 'darwin':
+            return []
+        metadata_root = Path.home() / 'Library/Application Support/Claude/claude-code-sessions'
+    live = dict(list_live_sessions(config_dir))
+    chats = {}
+    for path in Path(metadata_root).glob('*/*/local_*.json'):
+        try:
+            record = json.loads(_read(path, MAX_BYTES))
+            if not isinstance(record, dict) or record.get('isArchived') is not False:
+                continue
+            session_id = path.stem
+            _uuid(session_id.removeprefix('local_'))
+            if record.get('sessionId') != session_id:
+                continue
+        except (OSError, ValueError):
+            continue
+        cli_id = record.get('cliSessionId')
+        target = cli_id if isinstance(cli_id, str) and cli_id in live else None
+        title = record.get('title')
+        cwd = record.get('cwd')
+        origin = record.get('originCwd')
+        workspace = origin if isinstance(origin, str) and Path(origin).is_absolute() else cwd
+        workspace = workspace if isinstance(workspace, str) and Path(workspace).is_absolute() else None
+        spawned = record.get('spawnedFrom')
+        parent = record.get('forkedFromSessionId')
+        if not isinstance(parent, str) and isinstance(spawned, dict):
+            parent = spawned.get('sessionId')
+        chats[session_id] = {
+            'id': f'claude-desktop/{session_id}', 'provider': 'claude', 'participant': 'claude',
+            'conversation_id': session_id, 'title': title if isinstance(title, str) and title.strip()
+            else 'タイトル未取得', 'send_target': target,
+            'state': '送信可能' if target else '未接続',
+            'workspace': workspace,
+            'parent_chat_id': f'claude-desktop/{parent}' if isinstance(parent, str) else None,
+        }
+    return list(chats.values())
+
+
 def revalidate_target(target):
     current = resolve_target(target['session_id'], target.get('config_dir'))
     for key in ('pid', 'proc_start', 'socket_path', 'socket_device', 'socket_inode',

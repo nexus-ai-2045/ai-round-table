@@ -253,3 +253,17 @@ def test_clipboard_failure_after_preflight_remains_unknown(tmp_path, monkeypatch
     assert handoff.deliver(tp, inv)['state'] == 'delivery-unknown'
     assert handoff.deliver(tp, inv)['reason'] == 'resend-forbidden'
     copied.assert_called_once()
+
+
+def test_claude_preview_change_blocks_transport(tmp_path, monkeypatch):
+    from roundtable import claude_socket
+
+    tp, inv, _ = setup(tmp_path)
+    target = str(uuid.uuid4())
+    record = handoff.prepare(tp, inv, transport="claude-socket", claude_session=target)
+    resolve = Mock(side_effect=AssertionError("must not resolve a changed preview"))
+    monkeypatch.setattr(claude_socket, "resolve_target", resolve)
+    result = handoff.deliver(tp, inv, expected_preview=(target, "0" * 64, record["snapshot_sha256"]))
+    assert result == {"ok": False, "reason": "preview-changed"}
+    assert handoff.status(tp, inv)["state"] == "prepared"
+    resolve.assert_not_called()
