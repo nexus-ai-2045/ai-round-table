@@ -17,7 +17,7 @@ class QueueClient(CodexAppServerRelay):
     def _rpc(self, method, params, timeout=15):
         if method == "initialize":
             params = {**params, "capabilities": {"experimentalApi": True}}
-        elif method not in ("thread/read", "thread/queue/add"):
+        elif method not in ("thread/read", "thread/turns/list", "thread/queue/add"):
             raise ValueError("unsupported queue operation")
         return super()._rpc(method, params, timeout=timeout)
 
@@ -30,14 +30,30 @@ def _claim(tp, inv):
     return rec, claim
 
 
+TURN_PAGES = 100
+
+
+def _turns(client, thread_id):
+    """ページ分けされた会話でも読めるよう、thread/turns/list を全文表示で最後のページまで読む。"""
+    params = {"threadId": thread_id, "limit": 50, "sortDirection": "desc", "itemsView": "full"}
+    for _ in range(TURN_PAGES):
+        page = client._rpc("thread/turns/list", params)
+        yield from page.get("data", [])
+        cursor = page.get("nextCursor")
+        if not cursor:
+            return
+        params = {**params, "cursor": cursor}
+    raise ValueError("履歴のページが多すぎて照合できません")
+
+
 def observe(tp, inv, client):
     """Only an exact user item in the intended thread proves arrival."""
     _, claim = _claim(tp, inv)
-    thread = client._rpc("thread/read", {"threadId": claim["thread_id"], "includeTurns": True})["thread"]
+    thread = client._rpc("thread/read", {"threadId": claim["thread_id"], "includeTurns": False})["thread"]
     if thread.get("id") != claim["thread_id"]:
         raise ValueError("履歴の対象が一致しません")
     matches = []
-    for turn in thread.get("turns", []):
+    for turn in _turns(client, claim["thread_id"]):
         if turn.get("itemsView", "full") != "full":
             continue
         items = turn.get("items", [])
@@ -100,6 +116,8 @@ def send(frozen, root, slug, *, client_factory=QueueClient):
                 or any(key in record for key in ("codex_send_claim", "codex_queue_claim"))
                 or seat.get("thread_ref") != frozen.target or seat.get("transport") != "codex-queue"):
             raise ValueError("登録席または依頼の状態が変わりました")
+        if any((tp.scratch / f"{inv}.json{suffix}").exists() for suffix in ("", ".tmp")):
+            raise ValueError("回答がすでにあります。送らずに回収してください")
         if preview(root, slug, "codex", inv, frozen.target) != frozen:
             raise ValueError("プレビュー後に内容が変わりました")
         body = frozen.desktop_body(root, slug)

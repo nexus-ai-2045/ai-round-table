@@ -52,13 +52,15 @@ def test_queue_matches_arrival_and_collects_without_resending(tmp_path, lost_rep
                     raise EOFError("fixture connection loss after receiver accepted")
                 return {"queuedSubmission": {"id": str(uuid.uuid4()), "threadId": target,
                                             "clientUserMessageId": claim["client_id"]}}
-            if not params.get("includeTurns"):
+            assert not params.get("includeTurns")
+            if method == "thread/read":
                 return {"thread": {"id": target}}
-            return {"thread": {"id": target, "turns": [{
-                "id": "matching-turn", "status": "completed", "items": [{
+            assert method == "thread/turns/list" and params["itemsView"] == "full"
+            return {"data": [{
+                "id": "matching-turn", "status": "completed", "itemsView": "full", "items": [{
                     "type": "userMessage", "clientId": claim["client_id"], "content": sent["input"],
                 }],
-            }]}}
+            }], "nextCursor": None}
 
     codex_queue.send(frozen, root, slug, client_factory=Client)
     current = Journal.load(tp).data["invocations"][inv]
@@ -88,12 +90,14 @@ def test_arrival_needs_exact_thread_client_and_body(tmp_path, wrong):
 
     class Client:
         def _rpc(self, method, params):
-            return {"thread": {"id": "wrong" if wrong == "thread" else target, "turns": [{
+            if method == "thread/read":
+                return {"thread": {"id": "wrong" if wrong == "thread" else target}}
+            return {"data": [{
                 "id": "turn", "status": "completed", "items": [{
                     "type": "userMessage", "clientId": "wrong" if wrong == "client" else client_id,
                     "content": [{"type": "text", "text": "changed" if wrong == "body" else "approved"}],
                 }],
-            }]}}
+            }], "nextCursor": None}
 
     if wrong == "thread":
         with pytest.raises(ValueError):
@@ -121,3 +125,76 @@ def test_stale_journal_preserves_queue_acceptance_and_completed_arrival():
     result = _merge_invocations({"inv": saved}, {"inv": wrong}, conflicts)
     assert result["inv"]["codex_queue_arrival"] == saved["codex_queue_arrival"]
     assert len(conflicts) == 1
+
+
+def test_arrival_reads_paginated_thread_history_with_turns_list(tmp_path):
+    target, client_id = str(uuid.uuid4()), str(uuid.uuid4())
+    tp = ensure_topic(tmp_path, "paginated")
+    from roundtable import minutes
+    minutes.create(tp, "Check", ["codex"])
+    journal = Journal.load(tp)
+    inv = journal.new_invocation("codex", 1)
+    journal.data["invocations"][inv]["codex_queue_claim"] = {
+        "thread_id": target, "client_id": client_id, "body_sha256": sha256(b"approved").hexdigest(),
+    }
+    journal.save()
+    pages = []
+
+    class Client:
+        def _rpc(self, method, params):
+            if method == "thread/read":
+                if params.get("includeTurns"):
+                    raise RuntimeError("includeTurns is unsupported for paginated threads")
+                return {"thread": {"id": target}}
+            assert method == "thread/turns/list" and params["itemsView"] == "full"
+            pages.append(params.get("cursor"))
+            if params.get("cursor") is None:
+                return {"data": [{"id": "newer", "status": "completed", "itemsView": "full", "items": [
+                    {"type": "userMessage", "clientId": "other", "content": [{"type": "text", "text": "x"}]}]}],
+                    "nextCursor": "older"}
+            return {"data": [{"id": "turn", "status": "completed", "itemsView": "full", "items": [
+                {"type": "userMessage", "clientId": client_id, "content": [{"type": "text", "text": "approved"}]}]}],
+                "nextCursor": None}
+
+    assert codex_queue.observe(tp, inv, Client()) == {"state": "completed", "turn_id": "turn"}
+    assert pages == [None, "older"]
+
+
+def test_queue_client_allows_turns_list(monkeypatch):
+    from roundtable.relay_codex import CodexAppServerRelay
+
+    monkeypatch.setattr(CodexAppServerRelay, "_rpc", lambda self, method, params, timeout=15: method)
+    client = codex_queue.QueueClient.__new__(codex_queue.QueueClient)
+    for method in ("thread/read", "thread/turns/list", "thread/queue/add"):
+        assert client._rpc(method, {}) == method
+    with pytest.raises(ValueError):
+        client._rpc("turn/start", {})
+
+
+@pytest.mark.parametrize("suffix", ["", ".tmp"])
+def test_send_refuses_when_response_already_present(tmp_path, suffix):
+    root = tmp_path.resolve()
+    slug = "queue-present"
+    target = str(uuid.uuid4())
+    assert app_actions.execute(root, slug, "new-topic", "--topic", "Queue", "--participants", "codex").returncode == 0
+    inv = app_actions.prepared_invocation(app_actions.prepare_request(root, slug, "codex", "通常", question="確認"))
+    tp = ensure_topic(root, slug)
+    save_seats(tp, {f"rt/{slug}/codex": {"participant": "codex", "thread_ref": target, "transport": "codex-queue"}})
+    frozen = app_actions.preview(root, slug, "codex", inv, target)
+    atomic_write(tp.scratch / f"{inv}.json{suffix}", "{}")
+    calls = []
+
+    class Client:
+        def __init__(self, **kwargs):
+            pass
+
+        def _rpc(self, method, params):
+            calls.append(method)
+            raise AssertionError("must not contact the server")
+
+    with pytest.raises(ValueError):
+        codex_queue.send(frozen, root, slug, client_factory=Client)
+    record = Journal.load(tp).data["invocations"][inv]
+    assert "codex_queue_claim" not in record
+    assert record["state"] == "prepared"
+    assert calls == []
