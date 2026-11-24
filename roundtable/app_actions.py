@@ -16,6 +16,7 @@ from .paths import topic_dir
 
 
 ANTIGRAVITY_MODEL = "gemini-4-argon-medium"
+ANTIGRAVITY_PROMPT_LIMIT = 131071
 
 REVIEW_MODES = {
     "通常": "",
@@ -175,6 +176,9 @@ class Preview:
             if preview(root, slug, self.provider, inv, self.target) != self:
                 raise ValueError("プレビュー後に内容が変わりました")
             self.verify_ledger(root, slug)
+            prompt = self.antigravity_body(root, slug)
+            if len(prompt.encode("utf-8")) > ANTIGRAVITY_PROMPT_LIMIT:
+                raise ValueError("議事録が大きく、Antigravityへ1回で渡せません。送信していません。")
             record["antigravity_send_claim"] = {"model": self.target, "packet_sha256": self.packet_hash,
                                                "snapshot_sha256": self.snapshot_hash}
             record["delivery_route"] = "relay"
@@ -192,7 +196,7 @@ class Preview:
                     result = subprocess.run(
                         [binary, "--mode", "plan", "--sandbox", "--disable-slash-commands",
                          "--model", self.target, "--output-format", "json", "--json-schema",
-                         json.dumps(schema), "--print", self.antigravity_body(root, slug)],
+                         json.dumps(schema), "--print", prompt],
                         cwd=work, stdin=subprocess.DEVNULL, capture_output=True, text=True,
                         timeout=300, check=False,
                     )

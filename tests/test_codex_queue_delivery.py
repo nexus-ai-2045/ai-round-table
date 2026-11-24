@@ -266,3 +266,32 @@ def test_antigravity_send_refuses_a_packet_changed_outside_the_ledger(tmp_path, 
         frozen.send_antigravity(root, slug)
     assert ran == []
     assert "antigravity_send_claim" not in Journal.load(tp).data["invocations"][inv]
+
+
+def test_antigravity_send_refuses_an_oversized_prompt_before_claiming(tmp_path, monkeypatch):
+    root = tmp_path.resolve()
+    slug = "agy-large"
+    assert app_actions.execute(root, slug, "new-topic", "--topic", "Queue", "--participants", "antigravity").returncode == 0
+    inv = app_actions.prepared_invocation(app_actions.prepare_request(root, slug, "antigravity", "反証", question="確認"))
+    tp = ensure_topic(root, slug)
+    frozen = app_actions.preview(root, slug, "antigravity", inv, app_actions.ANTIGRAVITY_MODEL)
+    agy = str(tmp_path / "agy-fixture")
+    monkeypatch.setattr(app_actions.shutil, "which", lambda name: agy)
+    monkeypatch.setattr(app_actions.Preview, "antigravity_body",
+                        lambda self, root, slug: "議" * (app_actions.ANTIGRAVITY_PROMPT_LIMIT // 3 + 1))
+    ran = []
+    real_run = app_actions.subprocess.run
+
+    def run(argv, *args, **kwargs):
+        if argv and argv[0] == agy:
+            ran.append(argv)
+            raise AssertionError("antigravity must not be called")
+        return real_run(argv, *args, **kwargs)
+
+    monkeypatch.setattr(app_actions.subprocess, "run", run)
+    with pytest.raises(ValueError):
+        frozen.send_antigravity(root, slug)
+    assert ran == []
+    record = Journal.load(tp).data["invocations"][inv]
+    assert "antigravity_send_claim" not in record
+    assert record["state"] == "prepared"
