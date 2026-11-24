@@ -372,18 +372,22 @@ class CodexAppServerRelay:
             params["cwd"] = self.cwd
         return params
 
-    def _resume_thread(self, thread_id: str) -> None:
+    def _resume_thread(self, thread_id: str, *, verify_identity: bool = False) -> None:
         """既存 thread をこのプロセスの app-server に読み込ませる (複数ラウンド対応)。
 
         app-server は起動のたびに thread を保持しない。resume を挟まずに turn/start を
         撃つと `-32600 thread not found` で即失敗し、2 ラウンド目以降が丸ごと Tier3 へ
         縮退する (2026-08-06 実測)。プロセスあたり 1 回だけ撃てば足りる。
         """
-        if thread_id in self._loaded_threads:
+        if thread_id in self._loaded_threads and not verify_identity:
             return
         params = self._thread_params()
         params["threadId"] = thread_id
-        self._rpc("thread/resume", params, timeout=TIMEOUT_THREAD_RESUME)
+        result = self._rpc("thread/resume", params, timeout=TIMEOUT_THREAD_RESUME)
+        if verify_identity:
+            thread = result.get("thread") if isinstance(result, dict) else None
+            if not isinstance(thread, dict) or thread.get("id") != thread_id:
+                raise RelayError("thread/resume returned a different or missing thread ID")
         self._loaded_threads.add(thread_id)
 
     def _start_thread(self, seat: dict) -> str:
@@ -414,12 +418,21 @@ class CodexAppServerRelay:
         with self._send_lock:
             return self._send_locked(seat, text)
 
-    def _send_locked(self, seat: dict, text: str) -> str:
+    def send_existing(self, seat: dict, text: str) -> str:
+        """Send only after the server returns the exact resumed thread."""
+        with self._send_lock:
+            return self._send_locked(seat, text, existing_only=True)
+
+    def _send_locked(self, seat: dict, text: str, *, existing_only: bool = False) -> str:
         seat.pop("submission_receipt", None)
         try:
             self._ensure()
             thread_id = seat.get("thread_ref")
-            if thread_id:
+            if existing_only:
+                if not thread_id:
+                    raise RelayError("an existing Codex thread ID is required")
+                self._resume_thread(thread_id, verify_identity=True)
+            elif thread_id:
                 # 2 ラウンド目以降。seats.json に残った thread_ref を同じ席として使い続ける。
                 try:
                     self._resume_thread(thread_id)

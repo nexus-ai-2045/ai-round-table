@@ -31,6 +31,9 @@ class TopicPaths:
     scratch: Path
     snapshot: Path
 
+    def has_answer(self, inv: str) -> bool:
+        return any((self.scratch / f"{inv}.json{suffix}").exists() for suffix in ("", ".tmp"))
+
     @property
     def last_result(self) -> Path:
         return self.root / "last-result.json"
