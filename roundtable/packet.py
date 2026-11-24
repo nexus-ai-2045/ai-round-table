@@ -42,6 +42,14 @@ def captured_assignment(tp: TopicPaths, participant: str, inv_id: str, text: str
     return text[:-len(tail)]
 
 
+def inline_snapshot(tp: TopicPaths, participant: str, inv_id: str, text: str,
+                    snapshot_path: Path, snapshot: str) -> str:
+    assignment = captured_assignment(tp, participant, inv_id, text, snapshot_path)
+    _, output_instructions = text[len(assignment):].split("\n", 1)
+    return (assignment + "1. 下記の固定済み議事録を読む。\n" + output_instructions
+            + "\n\n── 議事録の固定版 ──\n\n" + snapshot)
+
+
 def clipboard_command() -> tuple[str, str, str]:
     """搬出と事前確認で共有するOS別のコマンド・文字コード・接頭文字。"""
     system = platform.system()
