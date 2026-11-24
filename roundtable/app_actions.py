@@ -64,8 +64,7 @@ def collection_plan(root: Path, slug: str, record: dict) -> tuple[str, object]:
     if record["participant"] == "codex":
         if Journal.load(tp).data["invocations"].get(inv, {}).get("codex_queue_claim"):
             return "recover", None
-        answered = any((tp.scratch / f"{inv}.json{suffix}").exists() for suffix in ("", ".tmp"))
-        if record["state"] == "prepared" and not answered:
+        if record["state"] == "prepared" and not tp.has_answer(inv):
             return "blocked", "送信が始まった依頼か、回答が届いた依頼を指定してください。"
     return "execute", ("collect", "--invocation", inv, "--timeout", "0")
 
@@ -130,6 +129,8 @@ class Preview:
                     or record.get("participant") != "codex" or record.get("state") != "prepared"
                     or record.get("delivery_route") != "stdout-only" or "codex_send_claim" in record):
                 raise ValueError("宛先または依頼の状態が変わりました")
+            if tp.has_answer(self.invocation):
+                raise ValueError("この依頼には回答が既にあります。先に回収してください")
             if preview(root, slug, "codex", self.invocation, self.target) != self:
                 raise ValueError("プレビュー後に内容が変わりました")
             self.verify_ledger(root, slug)
@@ -169,7 +170,7 @@ class Preview:
             record = journal.data["invocations"].get(inv, {})
             if (record.get("state") != "prepared" or record.get("participant") != "antigravity"
                     or record.get("delivery_route") != "stdout-only" or "antigravity_send_claim" in record
-                    or output.exists() or output.with_name(output.name + ".tmp").exists()):
+                    or tp.has_answer(inv)):
                 raise ValueError("準備済みの未送信依頼を選んでください（回答がある依頼は先に回収してください）")
             if preview(root, slug, self.provider, inv, self.target) != self:
                 raise ValueError("プレビュー後に内容が変わりました")

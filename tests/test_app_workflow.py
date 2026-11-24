@@ -146,3 +146,38 @@ def test_collection_plan_routes_claude_and_queued_codex(tmp_path):
     assert app_actions.collection_plan(root, slug, {"id": inv, "participant": "codex", "state": "delivered"}) == ("recover", None)
     assert app_actions.collection_plan(root, slug, {"id": "abc", "participant": "claude", "state": "delivered"}) == (
         "execute", ("socket-collect", "--invocation", "abc"))
+
+
+@pytest.mark.parametrize("suffix", ["", ".tmp"])
+def test_desktop_reservation_refuses_when_an_answer_already_exists(tmp_path, suffix):
+    from roundtable.journal import Journal
+    from roundtable.paths import ensure_topic
+    from roundtable.relay import save_seats
+
+    root = tmp_path.resolve()
+    slug = "desktop-answered"
+    target = str(uuid.uuid4())
+    assert app_actions.execute(root, slug, "new-topic", "--topic", "架空議題", "--participants", "codex").returncode == 0
+    inv = app_actions.prepared_invocation(app_actions.prepare_request(root, slug, "codex", "反証"))
+    tp = ensure_topic(root, slug)
+    save_seats(tp, {f"rt/{slug}/codex": {"participant": "codex", "thread_ref": target, "transport": "codex-desktop"}})
+    frozen = app_actions.preview(root, slug, "codex", inv, target)
+    (tp.scratch / f"{inv}.json{suffix}").write_text("{}", encoding="utf-8")
+    with pytest.raises(ValueError):
+        frozen.reserve_desktop(root, slug)
+    record = Journal.load(tp).data["invocations"][inv]
+    assert "codex_send_claim" not in record
+    assert record["delivery_route"] == "stdout-only"
+
+
+def test_topic_paths_has_answer_sees_final_and_temporary_output(tmp_path):
+    from roundtable.paths import ensure_topic
+
+    tp = ensure_topic(tmp_path, "answers")
+    assert not tp.has_answer("abc")
+    (tp.scratch / "abc.json.tmp").write_text("{}", encoding="utf-8")
+    assert tp.has_answer("abc")
+    (tp.scratch / "abc.json.tmp").unlink()
+    (tp.scratch / "abc.json").write_text("{}", encoding="utf-8")
+    assert tp.has_answer("abc")
+    assert not tp.has_answer("other")

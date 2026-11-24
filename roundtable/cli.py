@@ -392,7 +392,7 @@ def _cmd_frozen_send(args) -> int:
             text = read_previewed(request, args.packet_sha256).decode("utf-8")
             snapshot_text = read_previewed(snapshot, args.snapshot_sha256).decode("utf-8")
             text = packet.inline_snapshot(tp, provider, inv, text, snapshot, snapshot_text)
-            if any((tp.scratch / f"{inv}.json{suffix}").exists() for suffix in ("", ".tmp")):
+            if tp.has_answer(inv):
                 raise ValueError("invocation already has an output; collect it first")
 
             rec[claim_key] = {
@@ -433,9 +433,7 @@ def _cmd_frozen_send(args) -> int:
                 delivery_unknown = False
         from .relay_grok import GrokAcpRelay
 
-        if isinstance(relay, GrokAcpRelay) and not any(
-            (tp.scratch / f"{inv}.json{suffix}").exists() for suffix in ("", ".tmp")
-        ):
+        if isinstance(relay, GrokAcpRelay) and not tp.has_answer(inv):
             answer = relay.captured_answer_json()
             if answer is not None:
                 minutes.atomic_write(tp.scratch / f"{inv}.json", answer)

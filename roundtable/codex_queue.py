@@ -116,7 +116,7 @@ def send(frozen, root, slug, *, client_factory=QueueClient):
                 or any(key in record for key in ("codex_send_claim", "codex_queue_claim"))
                 or seat.get("thread_ref") != frozen.target or seat.get("transport") != "codex-queue"):
             raise ValueError("登録席または依頼の状態が変わりました")
-        if any((tp.scratch / f"{inv}.json{suffix}").exists() for suffix in ("", ".tmp")):
+        if tp.has_answer(inv):
             raise ValueError("回答がすでにあります。送らずに回収してください")
         if preview(root, slug, "codex", inv, frozen.target) != frozen:
             raise ValueError("プレビュー後に内容が変わりました")

@@ -61,7 +61,7 @@ def _blocked(tp, inv, rec, *, capture=False):
         rec["state"] == "waiting" and rec.get("delivery_route") == "stdout-only"
     ):
         return {"ok": False, "reason": rec["state"], "next_action": "collect-or-inspect"}
-    if not capture and any((tp.scratch / f"{inv}.json{suffix}").exists() for suffix in ("", ".tmp")):
+    if not capture and tp.has_answer(inv):
         return {"ok": False, "reason": "response-present", "next_action": "collect"}
     return None
 
